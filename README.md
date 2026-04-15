@@ -1,6 +1,8 @@
-# Polychud
-
-Discord bot for virtual betting on Polymarket prediction markets. No real money — just points.
+# PolyChud
+<p align="center">
+<img src="https://media1.tenor.com/m/VKVQpXoNbHoAAAAd/chud-chudjak.gif" height="150" />
+</p>
+Discord bot for virtual betting on Polymarket prediction markets. No real money — just points. Nothing ever happens....
 
 ## Setup
 
