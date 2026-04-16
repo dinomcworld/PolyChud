@@ -5,7 +5,11 @@ import {
   EmbedBuilder,
   type ModalSubmitInteraction,
 } from "discord.js";
-import { getMarketWithPrices } from "../services/markets.js";
+import {
+  getCachedMarket,
+  getMarketByConditionId,
+  getMidpointPrice,
+} from "../services/polymarket.js";
 import { ensureUser, ensureGuildSettings } from "../services/users.js";
 import { getUserActiveBets } from "../services/betting.js";
 import { config } from "../config.js";
@@ -26,9 +30,9 @@ export async function handleModal(interaction: ModalSubmitInteraction) {
 async function handleBetModal(interaction: ModalSubmitInteraction) {
   await interaction.deferReply({ ephemeral: true });
 
-  // betmodal_{marketId}_{outcome}
+  // betmodal_{conditionId}_{outcome}
   const parts = interaction.customId.split("_");
-  const marketId = parseInt(parts[1]!, 10);
+  const conditionId = parts[1]!;
   const outcome = parts[2] as "yes" | "no";
 
   const amountStr = interaction.fields.getTextInputValue("bet_amount").trim();
@@ -75,34 +79,51 @@ async function handleBetModal(interaction: ModalSubmitInteraction) {
     return;
   }
 
-  // Get market
-  const market = await getMarketWithPrices(marketId, true);
-  if (!market) {
+  // Fetch market from Gamma API
+  let gamma = getCachedMarket(conditionId);
+  if (!gamma) {
+    gamma = await getMarketByConditionId(conditionId);
+  }
+
+  if (!gamma) {
     await interaction.editReply({ content: "Market not found." });
     return;
   }
 
-  if (market.status !== "active") {
+  if (gamma.closed || !gamma.active) {
     await interaction.editReply({
       content: "This market is no longer active.",
     });
     return;
   }
 
-  const price =
-    outcome === "yes"
-      ? parseFloat(market.currentYesPrice || "0.5")
-      : parseFloat(market.currentNoPrice || "0.5");
+  // Get fresh price from CLOB
+  const tokenId = outcome === "yes" ? gamma.clobTokenIds[0] : gamma.clobTokenIds[1];
+  if (!tokenId) {
+    await interaction.editReply({ content: "Market pricing data unavailable." });
+    return;
+  }
+
+  let price: number;
+  try {
+    price = await getMidpointPrice(tokenId);
+  } catch {
+    await interaction.editReply({
+      content: "Couldn't fetch current price. Try again in a moment.",
+    });
+    return;
+  }
+
   const pct = (price * 100).toFixed(1);
   const potentialPayout = Math.floor(amount / price);
 
-  // Show confirmation
+  // Show confirmation — pass conditionId in confirm button
   const embed = new EmbedBuilder()
     .setTitle("Confirm your bet")
     .setColor(0xffaa00)
     .setDescription(
       [
-        `**Market:** ${market.question}`,
+        `**Market:** ${gamma.question}`,
         `**Outcome:** ${outcome.toUpperCase()} at ${pct}%`,
         `**Stake:** ${amount.toLocaleString()} pts`,
         `**Potential payout:** ${potentialPayout.toLocaleString()} pts (if you win)`,
@@ -112,7 +133,7 @@ async function handleBetModal(interaction: ModalSubmitInteraction) {
 
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
-      .setCustomId(`confirm_${marketId}_${outcome}_${amount}`)
+      .setCustomId(`confirm_${conditionId}_${outcome}_${amount}`)
       .setLabel("Confirm")
       .setStyle(ButtonStyle.Success),
     new ButtonBuilder()

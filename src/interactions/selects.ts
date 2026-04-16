@@ -1,18 +1,13 @@
 import type { StringSelectMenuInteraction } from "discord.js";
 import { logger } from "../utils/logger.js";
 import {
-  getMarketWithPrices,
-  getEventWithMarkets,
-  upsertEventWithMarkets,
-  upsertStandaloneMarket,
-} from "../services/markets.js";
-import {
   getCachedMarket,
   getMarketByConditionId,
+  getEventById,
 } from "../services/polymarket.js";
 import { buildMarketEmbed, buildMarketButtons } from "../ui/marketCard.js";
 import {
-  marketToCardData,
+  gammaMarketToCardData,
   buildEventCardFromGamma,
 } from "../commands/market.js";
 import {
@@ -62,16 +57,14 @@ async function handleMarketSelect(interaction: StringSelectMenuInteraction) {
     // If this market belongs to a multi-outcome event, show the event card
     const parentEvent = gamma.events?.[0];
     if (parentEvent && parentEvent.markets.length > 1) {
-      // Upsert only this event to DB (needed for bet/refresh buttons)
-      const { eventDbId, marketIdMap } = await upsertEventWithMarkets(parentEvent);
-      const eventData = buildEventCardFromGamma(parentEvent, eventDbId, marketIdMap);
+      const eventData = buildEventCardFromGamma(parentEvent);
       const hasHidden = eventData.outcomes.some(
         (o) => o.status === "resolved" || o.status === "closed"
       );
       const embed = buildEventEmbed(eventData);
       const selectMenu = buildEventSelectMenu(eventData);
       const buttons = buildEventButtons(
-        eventDbId,
+        parentEvent.id,
         parentEvent.slug,
         false,
         hasHidden
@@ -83,28 +76,14 @@ async function handleMarketSelect(interaction: StringSelectMenuInteraction) {
       return;
     }
 
-    // Single market — upsert just this one, then show binary card
-    const dbId = await upsertStandaloneMarket(gamma);
-    const market = await getMarketWithPrices(dbId, true);
-    if (!market) {
-      await interaction.followUp({
-        content: "Market not found.",
-        ephemeral: true,
-      });
-      return;
-    }
-
-    let eventSlug: string | null = null;
-    if (market.eventId) {
-      const event = await getEventWithMarkets(market.eventId);
-      if (event) eventSlug = event.slug;
-    }
-
-    const embed = buildMarketEmbed(marketToCardData(market, eventSlug));
+    // Single market — show binary card
+    const eventSlug = gamma.events?.[0]?.slug ?? null;
+    const cardData = gammaMarketToCardData(gamma, eventSlug);
+    const embed = buildMarketEmbed(cardData);
     const buttons = buildMarketButtons(
-      market.id,
-      market.slug,
-      market.status === "active",
+      gamma.conditionId,
+      gamma.slug,
+      gamma.active && !gamma.closed,
       eventSlug
     );
 
@@ -124,12 +103,18 @@ async function handleMarketSelect(interaction: StringSelectMenuInteraction) {
 async function handleEventSelect(interaction: StringSelectMenuInteraction) {
   await interaction.deferUpdate();
 
-  const eventDbId = parseInt(interaction.customId.split("_")[2]!, 10);
-  const marketId = parseInt(interaction.values[0]!, 10);
+  // event_select_{polyEventId}
+  const polyEventId = interaction.customId.split("_")[2]!;
+  const conditionId = interaction.values[0]!;
 
   try {
-    const market = await getMarketWithPrices(marketId, true);
-    if (!market) {
+    // Fetch market from cache or API
+    let gamma = getCachedMarket(conditionId);
+    if (!gamma) {
+      gamma = await getMarketByConditionId(conditionId);
+    }
+
+    if (!gamma) {
       await interaction.followUp({
         content: "Market not found.",
         ephemeral: true,
@@ -137,18 +122,17 @@ async function handleEventSelect(interaction: StringSelectMenuInteraction) {
       return;
     }
 
-    let eventSlug: string | null = null;
-    const event = await getEventWithMarkets(eventDbId);
-    if (event) eventSlug = event.slug;
-
-    const embed = buildMarketEmbed(marketToCardData(market, eventSlug));
+    const eventSlug = gamma.events?.[0]?.slug ?? null;
+    const cardData = gammaMarketToCardData(gamma, eventSlug);
+    const embed = buildMarketEmbed(cardData);
     const buttons = buildMarketButtons(
-      market.id,
-      market.slug,
-      market.status === "active",
-      eventSlug
+      gamma.conditionId,
+      gamma.slug,
+      gamma.active && !gamma.closed,
+      eventSlug,
+      polyEventId
     );
-    buttons.addComponents(buildBackToEventButton(eventDbId));
+    buttons.addComponents(buildBackToEventButton(polyEventId));
 
     await interaction.editReply({
       embeds: [embed],

@@ -9,21 +9,27 @@ import {
   type ButtonInteraction,
 } from "discord.js";
 import { logger } from "../utils/logger.js";
-import { getMarketWithPrices, getEventWithMarkets } from "../services/markets.js";
+import {
+  getCachedMarket,
+  getMarketByConditionId,
+  getEventById,
+  getMidpointPrice,
+} from "../services/polymarket.js";
+import { upsertStandaloneMarket } from "../services/markets.js";
 import { placeBet, getBetById } from "../services/betting.js";
 import { closeBet } from "../services/betting.js";
 import { ensureUser } from "../services/users.js";
-import { getMidpointPrice } from "../services/polymarket.js";
-import {
-  buildMarketEmbed,
-  buildMarketButtons,
-} from "../ui/marketCard.js";
+import { buildMarketEmbed, buildMarketButtons } from "../ui/marketCard.js";
 import {
   buildEventEmbed,
   buildEventSelectMenu,
   buildEventButtons,
+  buildBackToEventButton,
 } from "../ui/eventCard.js";
-import { marketToCardData, buildEventCardFromDb } from "../commands/market.js";
+import {
+  gammaMarketToCardData,
+  buildEventCardFromGamma,
+} from "../commands/market.js";
 import { config } from "../config.js";
 
 export async function handleButton(interaction: ButtonInteraction) {
@@ -61,12 +67,12 @@ export async function handleButton(interaction: ButtonInteraction) {
 
 async function handleBetButton(interaction: ButtonInteraction) {
   const parts = interaction.customId.split("_");
-  // bet_yes_42 or bet_no_42
+  // bet_yes_{conditionId} or bet_no_{conditionId}
   const outcome = parts[1] as "yes" | "no";
-  const marketId = parseInt(parts[2]!, 10);
+  const conditionId = parts[2]!;
 
   const modal = new ModalBuilder()
-    .setCustomId(`betmodal_${marketId}_${outcome}`)
+    .setCustomId(`betmodal_${conditionId}_${outcome}`)
     .setTitle(`Place a ${outcome.toUpperCase()} bet`);
 
   const amountInput = new TextInputBuilder()
@@ -87,11 +93,41 @@ async function handleBetButton(interaction: ButtonInteraction) {
 
 async function handleRefresh(interaction: ButtonInteraction) {
   await interaction.deferUpdate();
-  const marketId = parseInt(interaction.customId.split("_")[1]!, 10);
+  // refresh_{conditionId} or refresh_{conditionId}_evt{polyEventId}
+  const raw = interaction.customId.slice("refresh_".length);
+  const evtIdx = raw.indexOf("_evt");
+  const conditionId = evtIdx >= 0 ? raw.slice(0, evtIdx) : raw;
+  const polyEventId = evtIdx >= 0 ? raw.slice(evtIdx + 4) : null;
 
   try {
-    const market = await getMarketWithPrices(marketId, true);
-    if (!market) {
+    // If within an event, fetch the event to get proper market context
+    if (polyEventId) {
+      const gammaEvent = await getEventById(polyEventId);
+      if (gammaEvent) {
+        const gamma = gammaEvent.markets.find((m) => m.conditionId === conditionId);
+        if (gamma) {
+          const cardData = gammaMarketToCardData(gamma, gammaEvent.slug);
+          const embed = buildMarketEmbed(cardData);
+          const buttons = buildMarketButtons(
+            gamma.conditionId,
+            gamma.slug,
+            gamma.active && !gamma.closed,
+            gammaEvent.slug,
+            gammaEvent.id
+          );
+          buttons.addComponents(buildBackToEventButton(gammaEvent.id));
+          await interaction.editReply({
+            embeds: [embed],
+            components: [buttons],
+          });
+          return;
+        }
+      }
+    }
+
+    // Standalone market refresh
+    const gamma = await getMarketByConditionId(conditionId);
+    if (!gamma) {
       await interaction.followUp({
         content: "Market not found.",
         ephemeral: true,
@@ -99,19 +135,16 @@ async function handleRefresh(interaction: ButtonInteraction) {
       return;
     }
 
-    // Look up event slug for correct Polymarket link
-    let eventSlug: string | null = null;
-    if (market.eventId) {
-      const event = await getEventWithMarkets(market.eventId);
-      if (event) eventSlug = event.slug;
-    }
-
-    const embed = buildMarketEmbed(marketToCardData(market, eventSlug));
+    const eventSlug = gamma.events?.[0]?.slug ?? null;
+    const eventId = gamma.events?.[0]?.id ?? null;
+    const cardData = gammaMarketToCardData(gamma, eventSlug);
+    const embed = buildMarketEmbed(cardData);
     const buttons = buildMarketButtons(
-      market.id,
-      market.slug,
-      market.status === "active",
-      eventSlug
+      gamma.conditionId,
+      gamma.slug,
+      gamma.active && !gamma.closed,
+      eventSlug,
+      eventId
     );
     await interaction.editReply({
       embeds: [embed],
@@ -128,11 +161,12 @@ async function handleRefresh(interaction: ButtonInteraction) {
 
 async function handleRefreshEvent(interaction: ButtonInteraction) {
   await interaction.deferUpdate();
-  const eventDbId = parseInt(interaction.customId.split("_")[2]!, 10);
+  // refresh_event_{polyEventId}
+  const polyEventId = interaction.customId.slice("refresh_event_".length);
 
   try {
-    const event = await getEventWithMarkets(eventDbId);
-    if (!event || event.markets.length === 0) {
+    const gammaEvent = await getEventById(polyEventId);
+    if (!gammaEvent || gammaEvent.markets.length === 0) {
       await interaction.followUp({
         content: "Event not found.",
         ephemeral: true,
@@ -140,13 +174,13 @@ async function handleRefreshEvent(interaction: ButtonInteraction) {
       return;
     }
 
-    const eventData = buildEventCardFromDb(event);
+    const eventData = buildEventCardFromGamma(gammaEvent);
     const hasHidden = eventData.outcomes.some(
       (o) => o.status === "resolved" || o.status === "closed"
     );
     const embed = buildEventEmbed(eventData);
     const selectMenu = buildEventSelectMenu(eventData);
-    const buttons = buildEventButtons(event.id, event.slug, false, hasHidden);
+    const buttons = buildEventButtons(gammaEvent.id, gammaEvent.slug, false, hasHidden);
     await interaction.editReply({
       embeds: [embed],
       components: [selectMenu, buttons],
@@ -162,11 +196,12 @@ async function handleRefreshEvent(interaction: ButtonInteraction) {
 
 async function handleBackToEvent(interaction: ButtonInteraction) {
   await interaction.deferUpdate();
-  const eventDbId = parseInt(interaction.customId.split("_")[2]!, 10);
+  // back_event_{polyEventId}
+  const polyEventId = interaction.customId.slice("back_event_".length);
 
   try {
-    const event = await getEventWithMarkets(eventDbId);
-    if (!event || event.markets.length === 0) {
+    const gammaEvent = await getEventById(polyEventId);
+    if (!gammaEvent || gammaEvent.markets.length === 0) {
       await interaction.followUp({
         content: "Event not found.",
         ephemeral: true,
@@ -174,13 +209,13 @@ async function handleBackToEvent(interaction: ButtonInteraction) {
       return;
     }
 
-    const eventData = buildEventCardFromDb(event);
+    const eventData = buildEventCardFromGamma(gammaEvent);
     const hasHidden = eventData.outcomes.some(
       (o) => o.status === "resolved" || o.status === "closed"
     );
     const embed = buildEventEmbed(eventData);
     const selectMenu = buildEventSelectMenu(eventData);
-    const buttons = buildEventButtons(event.id, event.slug, false, hasHidden);
+    const buttons = buildEventButtons(gammaEvent.id, gammaEvent.slug, false, hasHidden);
     await interaction.editReply({
       embeds: [embed],
       components: [selectMenu, buttons],
@@ -197,15 +232,44 @@ async function handleBackToEvent(interaction: ButtonInteraction) {
 async function handleConfirm(interaction: ButtonInteraction) {
   await interaction.deferUpdate();
 
-  // confirm_{marketId}_{outcome}_{amount}
+  // confirm_{conditionId}_{outcome}_{amount}
   const parts = interaction.customId.split("_");
-  const marketId = parseInt(parts[1]!, 10);
+  const conditionId = parts[1]!;
   const outcome = parts[2] as "yes" | "no";
   const amount = parseInt(parts[3]!, 10);
 
+  // Fetch market from Gamma to upsert
+  let gamma = getCachedMarket(conditionId);
+  if (!gamma) {
+    gamma = await getMarketByConditionId(conditionId);
+  }
+
+  if (!gamma) {
+    await interaction.editReply({
+      content: "Market not found. Try searching again.",
+      embeds: [],
+      components: [],
+    });
+    return;
+  }
+
+  // Upsert only this market to DB (at bet time)
+  let marketDbId: number;
+  try {
+    marketDbId = await upsertStandaloneMarket(gamma);
+  } catch (err) {
+    logger.error("Market upsert failed:", err);
+    await interaction.editReply({
+      content: "Failed to save market. Try again.",
+      embeds: [],
+      components: [],
+    });
+    return;
+  }
+
   const result = await placeBet(
     interaction.user.id,
-    marketId,
+    marketDbId,
     interaction.guildId!,
     outcome,
     amount
@@ -448,11 +512,12 @@ async function handleConfirmClose(interaction: ButtonInteraction) {
 async function handleToggleResolved(interaction: ButtonInteraction) {
   await interaction.deferUpdate();
   const showResolved = interaction.customId.startsWith("show_resolved_");
-  const eventDbId = parseInt(interaction.customId.split("_")[2]!, 10);
+  // show_resolved_{polyEventId} or hide_resolved_{polyEventId}
+  const polyEventId = interaction.customId.split("_")[2]!;
 
   try {
-    const event = await getEventWithMarkets(eventDbId);
-    if (!event || event.markets.length === 0) {
+    const gammaEvent = await getEventById(polyEventId);
+    if (!gammaEvent || gammaEvent.markets.length === 0) {
       await interaction.followUp({
         content: "Event not found.",
         ephemeral: true,
@@ -460,15 +525,15 @@ async function handleToggleResolved(interaction: ButtonInteraction) {
       return;
     }
 
-    const eventData = buildEventCardFromDb(event);
+    const eventData = buildEventCardFromGamma(gammaEvent);
     const hasHidden = eventData.outcomes.some(
       (o) => o.status === "resolved" || o.status === "closed"
     );
     const embed = buildEventEmbed(eventData, showResolved);
     const selectMenu = buildEventSelectMenu(eventData, showResolved);
     const buttons = buildEventButtons(
-      event.id,
-      event.slug,
+      gammaEvent.id,
+      gammaEvent.slug,
       showResolved,
       hasHidden
     );

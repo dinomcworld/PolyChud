@@ -6,10 +6,8 @@ import {
   getEventBySlug,
 } from "../services/polymarket.js";
 import {
-  upsertEventWithMarkets,
   getMarketWithPrices,
   getEventWithMarkets,
-  getEventByDbSlug,
 } from "../services/markets.js";
 import {
   buildMarketEmbed,
@@ -28,7 +26,7 @@ import {
   type EventOutcome,
 } from "../ui/eventCard.js";
 import { logger } from "../utils/logger.js";
-import type { GammaEvent } from "../services/polymarket.js";
+import type { GammaEvent, GammaMarket } from "../services/polymarket.js";
 
 export const marketCommand: Command = {
   data: new SlashCommandBuilder()
@@ -93,20 +91,19 @@ async function handleSearch(
       return;
     }
 
-    // If single result, upsert just that one and show card directly
+    // If single result, show card directly (no DB write)
     if (gammaEvents.length === 1) {
       const event = gammaEvents[0]!;
-      const { eventDbId, marketIdMap } = await upsertEventWithMarkets(event);
 
       if (event.markets.length > 1) {
-        const eventData = buildEventCardFromGamma(event, eventDbId, marketIdMap);
+        const eventData = buildEventCardFromGamma(event);
         const hasHidden = eventData.outcomes.some(
           (o) => o.status === "resolved" || o.status === "closed"
         );
         const embed = buildEventEmbed(eventData);
         const selectMenu = buildEventSelectMenu(eventData);
         const buttons = buildEventButtons(
-          eventDbId,
+          event.id,
           event.slug,
           false,
           hasHidden
@@ -117,25 +114,18 @@ async function handleSearch(
         });
       } else if (event.markets.length === 1) {
         const m = event.markets[0]!;
-        const dbId = marketIdMap.get(m.conditionId);
-        if (dbId != null) {
-          const market = await getMarketWithPrices(dbId, true);
-          if (market) {
-            const embed = buildMarketEmbed(marketToCardData(market, event.slug));
-            const buttons = buildMarketButtons(
-              market.id,
-              market.slug,
-              market.status === "active",
-              event.slug
-            );
-            await interaction.editReply({
-              embeds: [embed],
-              components: [buttons],
-            });
-            return;
-          }
-        }
-        await interaction.editReply({ content: "Market not found." });
+        const cardData = gammaMarketToCardData(m, event.slug);
+        const embed = buildMarketEmbed(cardData);
+        const buttons = buildMarketButtons(
+          m.conditionId,
+          m.slug,
+          m.active && !m.closed,
+          event.slug
+        );
+        await interaction.editReply({
+          embeds: [embed],
+          components: [buttons],
+        });
       }
       return;
     }
@@ -330,83 +320,26 @@ async function handleViewBySlug(
   interaction: import("discord.js").ChatInputCommandInteraction,
   slug: string
 ) {
-  // Try Gamma API first
+  // Fetch from Gamma API (no DB write)
   const gammaEvent = await getEventBySlug(slug);
 
-  if (gammaEvent) {
-    const { eventDbId, marketIdMap } = await upsertEventWithMarkets(gammaEvent);
-
-    if (gammaEvent.markets.length > 1) {
-      // Multi-outcome — show event card
-      const eventData = buildEventCardFromGamma(
-        gammaEvent,
-        eventDbId,
-        marketIdMap
-      );
-      const hasHidden = eventData.outcomes.some(
-        (o) => o.status === "resolved" || o.status === "closed"
-      );
-      const embed = buildEventEmbed(eventData);
-      const selectMenu = buildEventSelectMenu(eventData);
-      const buttons = buildEventButtons(
-        eventDbId,
-        gammaEvent.slug,
-        false,
-        hasHidden
-      );
-      await interaction.editReply({
-        embeds: [embed],
-        components: [selectMenu, buttons],
-      });
-      return;
-    }
-
-    // Single market — show binary card
-    const m = gammaEvent.markets[0];
-    if (m) {
-      const dbId = marketIdMap.get(m.conditionId);
-      if (dbId != null) {
-        const market = await getMarketWithPrices(dbId, true);
-        if (market) {
-          const embed = buildMarketEmbed(
-            marketToCardData(market, gammaEvent.slug)
-          );
-          const buttons = buildMarketButtons(
-            market.id,
-            market.slug,
-            market.status === "active",
-            gammaEvent.slug
-          );
-          await interaction.editReply({
-            embeds: [embed],
-            components: [buttons],
-          });
-          return;
-        }
-      }
-    }
-  }
-
-  // Fallback: check DB
-  const dbEvent = await getEventByDbSlug(slug);
-  if (!dbEvent || dbEvent.markets.length === 0) {
+  if (!gammaEvent) {
     await interaction.editReply({
       content: `Event "${slug}" not found. Check the URL and try again.`,
     });
     return;
   }
 
-  const eventData = buildEventCardFromDb(dbEvent);
-  const hasHidden = eventData.outcomes.some(
-    (o) => o.status === "resolved" || o.status === "closed"
-  );
-
-  if (dbEvent.markets.length > 1) {
+  if (gammaEvent.markets.length > 1) {
+    const eventData = buildEventCardFromGamma(gammaEvent);
+    const hasHidden = eventData.outcomes.some(
+      (o) => o.status === "resolved" || o.status === "closed"
+    );
     const embed = buildEventEmbed(eventData);
     const selectMenu = buildEventSelectMenu(eventData);
     const buttons = buildEventButtons(
-      dbEvent.id,
-      dbEvent.slug,
+      gammaEvent.id,
+      gammaEvent.slug,
       false,
       hasHidden
     );
@@ -414,22 +347,23 @@ async function handleViewBySlug(
       embeds: [embed],
       components: [selectMenu, buttons],
     });
-  } else {
-    const market = await getMarketWithPrices(dbEvent.markets[0]!.id, true);
-    if (!market) {
-      await interaction.editReply({ content: "Market not found." });
-      return;
-    }
-    const embed = buildMarketEmbed(marketToCardData(market, dbEvent.slug));
+  } else if (gammaEvent.markets.length === 1) {
+    const m = gammaEvent.markets[0]!;
+    const cardData = gammaMarketToCardData(m, gammaEvent.slug);
+    const embed = buildMarketEmbed(cardData);
     const buttons = buildMarketButtons(
-      market.id,
-      market.slug,
-      market.status === "active",
-      dbEvent.slug
+      m.conditionId,
+      m.slug,
+      m.active && !m.closed,
+      gammaEvent.slug
     );
     await interaction.editReply({
       embeds: [embed],
       components: [buttons],
+    });
+  } else {
+    await interaction.editReply({
+      content: `Event "${slug}" has no markets.`,
     });
   }
 }
@@ -447,19 +381,21 @@ async function handleViewById(
   }
 
   let eventSlug: string | null = null;
+  let polyEventId: string | null = null;
   if (market.eventId) {
     const event = await getEventWithMarkets(market.eventId);
     if (event) {
       eventSlug = event.slug;
-      if (event.markets.length > 1) {
-        const embed = buildMarketEmbed(marketToCardData(market, eventSlug));
+      polyEventId = event.polymarketEventId;
+      if (event.markets.length > 1 && polyEventId) {
+        const embed = buildMarketEmbed(dbMarketToCardData(market, eventSlug));
         const buttons = buildMarketButtons(
-          market.id,
+          market.polymarketConditionId,
           market.slug,
           market.status === "active",
           eventSlug
         );
-        buttons.addComponents(buildBackToEventButton(event.id));
+        buttons.addComponents(buildBackToEventButton(polyEventId));
         await interaction.editReply({
           embeds: [embed],
           components: [buttons],
@@ -469,9 +405,9 @@ async function handleViewById(
     }
   }
 
-  const embed = buildMarketEmbed(marketToCardData(market, eventSlug));
+  const embed = buildMarketEmbed(dbMarketToCardData(market, eventSlug));
   const buttons = buildMarketButtons(
-    market.id,
+    market.polymarketConditionId,
     market.slug,
     market.status === "active",
     eventSlug
@@ -484,9 +420,31 @@ async function handleViewById(
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function marketToCardData(
+/** Build card data from a Gamma API market (no DB). */
+function gammaMarketToCardData(
+  gamma: GammaMarket,
+  eventSlug?: string | null
+) {
+  const yesPrice = gamma.outcomePrices[0] ?? 0.5;
+  return {
+    conditionId: gamma.conditionId,
+    question: gamma.question,
+    slug: gamma.slug,
+    eventSlug: eventSlug ?? null,
+    yesPrice,
+    noPrice: gamma.outcomePrices[1] ?? 1 - yesPrice,
+    volume24h: gamma.volume24hr ? String(gamma.volume24hr) : null,
+    endDate: gamma.endDate ? new Date(gamma.endDate) : null,
+    imageUrl: gamma.image || gamma.icon || null,
+    status: gamma.closed ? "closed" : gamma.active ? "active" : "inactive",
+    outcomeLabel: gamma.groupItemTitle || null,
+  };
+}
+
+/** Build card data from a DB market row. */
+function dbMarketToCardData(
   market: {
-    id: number;
+    polymarketConditionId: string;
     question: string;
     slug: string | null;
     currentYesPrice: string | null;
@@ -495,12 +453,11 @@ function marketToCardData(
     endDate: Date | null;
     status: string;
     outcomeLabel: string | null;
-    eventId: number | null;
   },
   eventSlug?: string | null
 ) {
   return {
-    dbId: market.id,
+    conditionId: market.polymarketConditionId,
     question: market.question,
     slug: market.slug,
     eventSlug: eventSlug ?? null,
@@ -514,28 +471,20 @@ function marketToCardData(
   };
 }
 
-function buildEventCardFromGamma(
-  gamma: GammaEvent,
-  eventDbId: number,
-  marketIdMap: Map<string, number>
-): EventCardData {
-  const outcomes: EventOutcome[] = [];
-  for (const m of gamma.markets) {
-    const dbId = marketIdMap.get(m.conditionId);
-    if (dbId != null) {
-      const mStatus = m.closed ? "closed" : m.active ? "active" : "inactive";
-      outcomes.push({
-        marketDbId: dbId,
-        label: extractOutcomeLabel(m.question, m.groupItemTitle),
-        yesPrice: m.outcomePrices[0] ?? 0.5,
-        status: mStatus,
-        endDate: m.endDate ? new Date(m.endDate) : null,
-      });
-    }
-  }
+function buildEventCardFromGamma(gamma: GammaEvent): EventCardData {
+  const outcomes: EventOutcome[] = gamma.markets.map((m) => {
+    const mStatus = m.closed ? "closed" : m.active ? "active" : "inactive";
+    return {
+      conditionId: m.conditionId,
+      label: extractOutcomeLabel(m.question, m.groupItemTitle),
+      yesPrice: m.outcomePrices[0] ?? 0.5,
+      status: mStatus,
+      endDate: m.endDate ? new Date(m.endDate) : null,
+    };
+  });
 
   return {
-    eventDbId,
+    polyEventId: gamma.id,
     title: gamma.title,
     slug: gamma.slug,
     imageUrl: gamma.image || gamma.icon || null,
@@ -547,14 +496,14 @@ function buildEventCardFromGamma(
 }
 
 function buildEventCardFromDb(event: {
-  id: number;
+  polymarketEventId: string;
   title: string;
   slug: string | null;
   imageUrl: string | null;
   endDate: Date | null;
   status: string;
   markets: Array<{
-    id: number;
+    polymarketConditionId: string;
     question: string;
     outcomeLabel: string | null;
     currentYesPrice: string | null;
@@ -564,7 +513,7 @@ function buildEventCardFromDb(event: {
   }>;
 }): EventCardData {
   const outcomes: EventOutcome[] = event.markets.map((m) => ({
-    marketDbId: m.id,
+    conditionId: m.polymarketConditionId,
     label: extractOutcomeLabel(m.question, m.outcomeLabel),
     yesPrice: parseFloat(m.currentYesPrice || "0.5"),
     status: m.status,
@@ -576,7 +525,7 @@ function buildEventCardFromDb(event: {
   }, 0);
 
   return {
-    eventDbId: event.id,
+    polyEventId: event.polymarketEventId,
     title: event.title,
     slug: event.slug,
     imageUrl: event.imageUrl,
@@ -587,4 +536,4 @@ function buildEventCardFromDb(event: {
   };
 }
 
-export { marketToCardData, buildEventCardFromDb, buildEventCardFromGamma };
+export { gammaMarketToCardData, dbMarketToCardData, buildEventCardFromDb, buildEventCardFromGamma };
