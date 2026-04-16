@@ -1,6 +1,6 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { users, guildSettings } from "../db/schema.js";
+import { users, guildMembers, guildSettings } from "../db/schema.js";
 import { config } from "../config.js";
 
 export async function ensureGuildSettings(guildId: string) {
@@ -32,21 +32,17 @@ export async function ensureGuildSettings(guildId: string) {
   return created;
 }
 
-export async function ensureUser(discordId: string, guildId: string) {
+/** Ensure a user row exists (identity only). */
+async function ensureUserRow(discordId: string) {
   const existing = await db.query.users.findFirst({
     where: eq(users.discordId, discordId),
   });
 
   if (existing) return existing;
 
-  const guild = await ensureGuildSettings(guildId);
-
   const [created] = await db
     .insert(users)
-    .values({
-      discordId,
-      pointsBalance: guild.startingPoints,
-    })
+    .values({ discordId })
     .onConflictDoNothing()
     .returning();
 
@@ -59,33 +55,78 @@ export async function ensureUser(discordId: string, guildId: string) {
   return created;
 }
 
+/** Ensure a guild_members row exists for this user+guild combo. */
+async function ensureMemberRow(userId: number, guildId: string) {
+  const existing = await db.query.guildMembers.findFirst({
+    where: and(
+      eq(guildMembers.userId, userId),
+      eq(guildMembers.guildId, guildId)
+    ),
+  });
+
+  if (existing) return existing;
+
+  const guild = await ensureGuildSettings(guildId);
+
+  const [created] = await db
+    .insert(guildMembers)
+    .values({
+      userId,
+      guildId,
+      pointsBalance: guild.startingPoints,
+    })
+    .onConflictDoNothing()
+    .returning();
+
+  if (!created) {
+    return (await db.query.guildMembers.findFirst({
+      where: and(
+        eq(guildMembers.userId, userId),
+        eq(guildMembers.guildId, guildId)
+      ),
+    }))!;
+  }
+
+  return created;
+}
+
+/**
+ * Ensure user + guild membership exist.
+ * Returns { user, member } where member holds the per-guild balance/stats.
+ */
+export async function ensureUser(discordId: string, guildId: string) {
+  const user = await ensureUserRow(discordId);
+  const member = await ensureMemberRow(user.id, guildId);
+  return { user, member };
+}
+
 export async function claimDaily(discordId: string, guildId: string) {
-  const user = await ensureUser(discordId, guildId);
+  const { member } = await ensureUser(discordId, guildId);
   const guild = await ensureGuildSettings(guildId);
   const now = new Date();
 
-  if (user.lastDailyClaim) {
-    const timeSinceClaim = now.getTime() - user.lastDailyClaim.getTime();
+  if (member.lastDailyClaim) {
+    const timeSinceClaim = now.getTime() - member.lastDailyClaim.getTime();
     const twentyFourHours = 24 * 60 * 60 * 1000;
 
     if (timeSinceClaim < twentyFourHours) {
       const nextClaim = new Date(
-        user.lastDailyClaim.getTime() + twentyFourHours
+        member.lastDailyClaim.getTime() + twentyFourHours
       );
-      return { claimed: false as const, nextClaim, balance: user.pointsBalance };
+      return { claimed: false as const, nextClaim, balance: member.pointsBalance };
     }
   }
 
-  const newBalance = user.pointsBalance + guild.dailyBonus;
+  const newBalance = member.pointsBalance + guild.dailyBonus;
 
   await db
-    .update(users)
+    .update(guildMembers)
     .set({
       pointsBalance: newBalance,
       lastDailyClaim: now,
       updatedAt: now,
     })
-    .where(eq(users.id, user.id));
+    .where(eq(guildMembers.id, member.id));
 
   return {
     claimed: true as const,
@@ -95,25 +136,29 @@ export async function claimDaily(discordId: string, guildId: string) {
 }
 
 export async function getUserStats(discordId: string, guildId: string) {
-  const user = await ensureUser(discordId, guildId);
+  const { user, member } = await ensureUser(discordId, guildId);
 
-  // Count active bets
+  // Count active bets in this guild
   const activeBets = await db.query.bets.findMany({
-    where: (bets, { and, eq: eqOp }) =>
-      and(eqOp(bets.userId, user.id), eqOp(bets.status, "pending")),
+    where: (bets, { and: andOp, eq: eqOp }) =>
+      andOp(
+        eqOp(bets.userId, user.id),
+        eqOp(bets.guildId, guildId),
+        eqOp(bets.status, "pending")
+      ),
   });
 
   const winRate =
-    user.totalBetsSettled > 0
-      ? ((user.totalWon / user.totalBetsSettled) * 100).toFixed(1)
+    member.totalBetsSettled > 0
+      ? ((member.totalWon / member.totalBetsSettled) * 100).toFixed(1)
       : "0.0";
 
   return {
-    pointsBalance: user.pointsBalance,
-    accumulatedPct: parseFloat(user.accumulatedPct),
-    totalBetsSettled: user.totalBetsSettled,
-    totalWon: user.totalWon,
-    totalLost: user.totalLost,
+    pointsBalance: member.pointsBalance,
+    accumulatedPct: parseFloat(member.accumulatedPct),
+    totalBetsSettled: member.totalBetsSettled,
+    totalWon: member.totalWon,
+    totalLost: member.totalLost,
     winRate,
     activeBetsCount: activeBets.length,
   };

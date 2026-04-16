@@ -8,6 +8,20 @@
       "when": 1776223768564,
       "tag": "0000_amused_karma",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1776360983452,
+      "tag": "0001_deep_kylun",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1776361727540,
+      "tag": "0002_fantastic_lady_bullseye",
+      "breakpoints": true
     }
   ]
 }

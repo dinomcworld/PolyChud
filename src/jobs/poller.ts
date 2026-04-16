@@ -84,7 +84,6 @@ async function runPollCycle(): Promise<number> {
           .set({
             currentYesPrice: String(yesPrice),
             currentNoPrice: String(1 - yesPrice),
-            lastPolledAt: new Date(),
             updatedAt: new Date(),
           })
           .where(eq(markets.id, market.id));

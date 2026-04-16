@@ -1,6 +1,6 @@
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { bets, events, markets, users } from "../db/schema.js";
+import { bets, events, guildMembers, markets, users } from "../db/schema.js";
 import { getMidpointPrice } from "./polymarket.js";
 import { ensureUser } from "./users.js";
 import { config } from "../config.js";
@@ -26,7 +26,7 @@ export async function placeBet(
   outcome: "yes" | "no",
   amount: number
 ): Promise<PlaceBetResult | PlaceBetError> {
-  const user = await ensureUser(discordId, guildId);
+  const { user, member } = await ensureUser(discordId, guildId);
 
   // Check market exists and is active
   const market = await db.query.markets.findFirst({
@@ -39,7 +39,11 @@ export async function placeBet(
 
   // Check active bet limits
   const userActiveBets = await db.query.bets.findMany({
-    where: and(eq(bets.userId, user.id), eq(bets.status, "pending")),
+    where: and(
+      eq(bets.userId, user.id),
+      eq(bets.guildId, guildId),
+      eq(bets.status, "pending")
+    ),
   });
 
   if (userActiveBets.length >= config.MAX_ACTIVE_BETS_PER_USER) {
@@ -85,30 +89,30 @@ export async function placeBet(
 
   const potentialPayout = Math.floor(amount / price);
 
-  // Atomic transaction: lock user row, check balance, deduct, insert bet
+  // Atomic transaction: lock guild_members row, check balance, deduct, insert bet
   try {
     const result = await db.transaction(async (tx) => {
-      // Lock user row
-      const [lockedUser] = await tx
+      // Lock guild member row
+      const [lockedMember] = await tx
         .select()
-        .from(users)
-        .where(eq(users.id, user.id))
+        .from(guildMembers)
+        .where(eq(guildMembers.id, member.id))
         .for("update");
 
-      if (!lockedUser || lockedUser.pointsBalance < amount) {
+      if (!lockedMember || lockedMember.pointsBalance < amount) {
         throw new Error(
-          `Insufficient balance. You have ${lockedUser?.pointsBalance ?? 0} points.`
+          `Insufficient balance. You have ${lockedMember?.pointsBalance ?? 0} points.`
         );
       }
 
-      // Deduct points
+      // Deduct points from guild member
       await tx
-        .update(users)
+        .update(guildMembers)
         .set({
-          pointsBalance: sql`${users.pointsBalance} - ${amount}`,
+          pointsBalance: sql`${guildMembers.pointsBalance} - ${amount}`,
           updatedAt: new Date(),
         })
-        .where(eq(users.id, user.id));
+        .where(eq(guildMembers.id, member.id));
 
       // Insert bet
       const [bet] = await tx
@@ -128,7 +132,7 @@ export async function placeBet(
 
       return {
         betId: bet!.id,
-        newBalance: lockedUser.pointsBalance - amount,
+        newBalance: lockedMember.pointsBalance - amount,
       };
     });
 
@@ -139,7 +143,7 @@ export async function placeBet(
       .set({
         currentYesPrice: String(yesPrice),
         currentNoPrice: String(1 - yesPrice),
-        lastPolledAt: new Date(),
+        updatedAt: new Date(),
       })
       .where(eq(markets.id, marketId));
 
@@ -206,7 +210,7 @@ export async function closeBet(
   discordId: string,
   guildId: string
 ): Promise<CloseBetSuccess | CloseBetError> {
-  const user = await ensureUser(discordId, guildId);
+  const { member } = await ensureUser(discordId, guildId);
 
   try {
     const result = await db.transaction(async (tx) => {
@@ -218,9 +222,22 @@ export async function closeBet(
         .for("update");
 
       if (!lockedBet) throw new Error("Bet not found.");
-      if (lockedBet.userId !== user.id) throw new Error("This isn't your bet.");
+      if (lockedBet.guildId !== guildId) throw new Error("This bet belongs to a different server.");
       if (lockedBet.status !== "pending")
         throw new Error(`Bet is already ${lockedBet.status}.`);
+
+      // Verify ownership via guild member
+      const [lockedMember] = await tx
+        .select()
+        .from(guildMembers)
+        .where(eq(guildMembers.id, member.id))
+        .for("update");
+
+      if (!lockedMember) throw new Error("Member not found.");
+
+      // Check that this bet belongs to the user behind this guild member
+      if (lockedBet.userId !== lockedMember.userId)
+        throw new Error("This isn't your bet.");
 
       // Get market data
       const market = await tx.query.markets.findFirst({
@@ -256,22 +273,22 @@ export async function closeBet(
         })
         .where(eq(bets.id, betId));
 
-      // Update user: credit cash-out, update accumulated_pct and settled count
+      // Credit guild member
       await tx
-        .update(users)
+        .update(guildMembers)
         .set({
-          pointsBalance: sql`${users.pointsBalance} + ${cashOutAmount}`,
-          accumulatedPct: sql`${users.accumulatedPct} + ${priceDelta}`,
-          totalBetsSettled: sql`${users.totalBetsSettled} + 1`,
+          pointsBalance: sql`${guildMembers.pointsBalance} + ${cashOutAmount}`,
+          accumulatedPct: sql`${guildMembers.accumulatedPct} + ${priceDelta}`,
+          totalBetsSettled: sql`${guildMembers.totalBetsSettled} + 1`,
           updatedAt: now,
         })
-        .where(eq(users.id, user.id));
+        .where(eq(guildMembers.id, member.id));
 
       // Get updated balance
-      const [updatedUser] = await tx
-        .select({ pointsBalance: users.pointsBalance })
-        .from(users)
-        .where(eq(users.id, user.id));
+      const [updatedMember] = await tx
+        .select({ pointsBalance: guildMembers.pointsBalance })
+        .from(guildMembers)
+        .where(eq(guildMembers.id, member.id));
 
       return {
         question: market.question,
@@ -280,7 +297,7 @@ export async function closeBet(
         staked: lockedBet.amount,
         cashOut: cashOutAmount,
         profit: cashOutAmount - lockedBet.amount,
-        newBalance: updatedUser!.pointsBalance,
+        newBalance: updatedMember!.pointsBalance,
       };
     });
 
@@ -291,7 +308,7 @@ export async function closeBet(
   }
 }
 
-// ─── Resolution (Phase 4 prep) ───────────────────────────────────────────────
+// ─── Resolution ─────────────────────────────────────────────────────────────
 
 /**
  * Resolve all pending bets on a single market.
@@ -329,24 +346,40 @@ export async function resolveMarketBets(
         })
         .where(eq(bets.id, bet.id));
 
-      // Update user
-      const userUpdates: Record<string, unknown> = {
-        accumulatedPct: sql`${users.accumulatedPct} + ${priceDelta}`,
-        totalBetsSettled: sql`${users.totalBetsSettled} + 1`,
+      // Find guild member for this user+guild
+      const [member] = await tx
+        .select()
+        .from(guildMembers)
+        .where(
+          and(
+            eq(guildMembers.userId, bet.userId),
+            eq(guildMembers.guildId, bet.guildId)
+          )
+        );
+
+      if (!member) {
+        logger.warn(`No guild member found for user ${bet.userId} in guild ${bet.guildId}`);
+        return;
+      }
+
+      // Update guild member stats
+      const memberUpdates: Record<string, unknown> = {
+        accumulatedPct: sql`${guildMembers.accumulatedPct} + ${priceDelta}`,
+        totalBetsSettled: sql`${guildMembers.totalBetsSettled} + 1`,
         updatedAt: now,
       };
 
       if (won) {
-        userUpdates.pointsBalance = sql`${users.pointsBalance} + ${payout}`;
-        userUpdates.totalWon = sql`${users.totalWon} + 1`;
+        memberUpdates.pointsBalance = sql`${guildMembers.pointsBalance} + ${payout}`;
+        memberUpdates.totalWon = sql`${guildMembers.totalWon} + 1`;
       } else {
-        userUpdates.totalLost = sql`${users.totalLost} + 1`;
+        memberUpdates.totalLost = sql`${guildMembers.totalLost} + 1`;
       }
 
       await tx
-        .update(users)
-        .set(userUpdates)
-        .where(eq(users.id, bet.userId));
+        .update(guildMembers)
+        .set(memberUpdates)
+        .where(eq(guildMembers.id, member.id));
     });
 
     settledCount++;
@@ -357,7 +390,6 @@ export async function resolveMarketBets(
     .update(markets)
     .set({
       status: "resolved",
-      resolvedOutcome: winningOutcome,
       updatedAt: new Date(),
     })
     .where(eq(markets.id, marketId));

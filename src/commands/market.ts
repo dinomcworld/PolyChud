@@ -4,11 +4,8 @@ import {
   searchMarkets,
   getTrendingMarkets,
   getEventBySlug,
+  getEventById,
 } from "../services/polymarket.js";
-import {
-  getMarketWithPrices,
-  getEventWithMarkets,
-} from "../services/markets.js";
 import {
   buildMarketEmbed,
   buildMarketButtons,
@@ -20,7 +17,6 @@ import {
   buildEventEmbed,
   buildEventSelectMenu,
   buildEventButtons,
-  buildBackToEventButton,
   extractOutcomeLabel,
   type EventCardData,
   type EventOutcome,
@@ -370,52 +366,52 @@ async function handleViewBySlug(
 
 async function handleViewById(
   interaction: import("discord.js").ChatInputCommandInteraction,
-  marketId: number
+  polyEventId: number
 ) {
-  const market = await getMarketWithPrices(marketId, true);
-  if (!market) {
+  const gammaEvent = await getEventById(String(polyEventId));
+  if (!gammaEvent) {
     await interaction.editReply({
-      content: `Market #${marketId} not found. Use \`/market search\` first.`,
+      content: `Event #${polyEventId} not found on Polymarket.`,
     });
     return;
   }
 
-  let eventSlug: string | null = null;
-  let polyEventId: string | null = null;
-  if (market.eventId) {
-    const event = await getEventWithMarkets(market.eventId);
-    if (event) {
-      eventSlug = event.slug;
-      polyEventId = event.polymarketEventId;
-      if (event.markets.length > 1 && polyEventId) {
-        const embed = buildMarketEmbed(dbMarketToCardData(market, eventSlug));
-        const buttons = buildMarketButtons(
-          market.polymarketConditionId,
-          market.slug,
-          market.status === "active",
-          eventSlug
-        );
-        buttons.addComponents(buildBackToEventButton(polyEventId));
-        await interaction.editReply({
-          embeds: [embed],
-          components: [buttons],
-        });
-        return;
-      }
-    }
+  if (gammaEvent.markets.length > 1) {
+    const eventData = buildEventCardFromGamma(gammaEvent);
+    const hasHidden = eventData.outcomes.some(
+      (o) => o.status === "resolved" || o.status === "closed"
+    );
+    const embed = buildEventEmbed(eventData);
+    const selectMenu = buildEventSelectMenu(eventData);
+    const buttons = buildEventButtons(
+      gammaEvent.id,
+      gammaEvent.slug,
+      false,
+      hasHidden
+    );
+    await interaction.editReply({
+      embeds: [embed],
+      components: [selectMenu, buttons],
+    });
+  } else if (gammaEvent.markets.length === 1) {
+    const m = gammaEvent.markets[0]!;
+    const cardData = gammaMarketToCardData(m, gammaEvent.slug);
+    const embed = buildMarketEmbed(cardData);
+    const buttons = buildMarketButtons(
+      m.conditionId,
+      m.slug,
+      m.active && !m.closed,
+      gammaEvent.slug
+    );
+    await interaction.editReply({
+      embeds: [embed],
+      components: [buttons],
+    });
+  } else {
+    await interaction.editReply({
+      content: `Event #${polyEventId} has no markets.`,
+    });
   }
-
-  const embed = buildMarketEmbed(dbMarketToCardData(market, eventSlug));
-  const buttons = buildMarketButtons(
-    market.polymarketConditionId,
-    market.slug,
-    market.status === "active",
-    eventSlug
-  );
-  await interaction.editReply({
-    embeds: [embed],
-    components: [buttons],
-  });
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -438,36 +434,6 @@ function gammaMarketToCardData(
     imageUrl: gamma.image || gamma.icon || null,
     status: gamma.closed ? "closed" : gamma.active ? "active" : "inactive",
     outcomeLabel: gamma.groupItemTitle || null,
-  };
-}
-
-/** Build card data from a DB market row. */
-function dbMarketToCardData(
-  market: {
-    polymarketConditionId: string;
-    question: string;
-    slug: string | null;
-    currentYesPrice: string | null;
-    currentNoPrice: string | null;
-    volume24h: string | null;
-    endDate: Date | null;
-    status: string;
-    outcomeLabel: string | null;
-  },
-  eventSlug?: string | null
-) {
-  return {
-    conditionId: market.polymarketConditionId,
-    question: market.question,
-    slug: market.slug,
-    eventSlug: eventSlug ?? null,
-    yesPrice: parseFloat(market.currentYesPrice || "0.5"),
-    noPrice: parseFloat(market.currentNoPrice || "0.5"),
-    volume24h: market.volume24h,
-    endDate: market.endDate,
-    imageUrl: null as string | null,
-    status: market.status,
-    outcomeLabel: market.outcomeLabel,
   };
 }
 
@@ -495,45 +461,4 @@ function buildEventCardFromGamma(gamma: GammaEvent): EventCardData {
   };
 }
 
-function buildEventCardFromDb(event: {
-  polymarketEventId: string;
-  title: string;
-  slug: string | null;
-  imageUrl: string | null;
-  endDate: Date | null;
-  status: string;
-  markets: Array<{
-    polymarketConditionId: string;
-    question: string;
-    outcomeLabel: string | null;
-    currentYesPrice: string | null;
-    volume24h: string | null;
-    status: string;
-    endDate: Date | null;
-  }>;
-}): EventCardData {
-  const outcomes: EventOutcome[] = event.markets.map((m) => ({
-    conditionId: m.polymarketConditionId,
-    label: extractOutcomeLabel(m.question, m.outcomeLabel),
-    yesPrice: parseFloat(m.currentYesPrice || "0.5"),
-    status: m.status,
-    endDate: m.endDate,
-  }));
-
-  const totalVolume = event.markets.reduce((sum, m) => {
-    return sum + (m.volume24h ? parseFloat(m.volume24h) : 0);
-  }, 0);
-
-  return {
-    polyEventId: event.polymarketEventId,
-    title: event.title,
-    slug: event.slug,
-    imageUrl: event.imageUrl,
-    endDate: event.endDate,
-    status: event.status,
-    volume24h: totalVolume > 0 ? totalVolume : null,
-    outcomes,
-  };
-}
-
-export { gammaMarketToCardData, dbMarketToCardData, buildEventCardFromDb, buildEventCardFromGamma };
+export { gammaMarketToCardData, buildEventCardFromGamma };

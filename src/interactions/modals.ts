@@ -46,7 +46,7 @@ async function handleBetModal(interaction: ModalSubmitInteraction) {
   }
 
   const guild = await ensureGuildSettings(interaction.guildId!);
-  const user = await ensureUser(interaction.user.id, interaction.guildId!);
+  const { member } = await ensureUser(interaction.user.id, interaction.guildId!);
 
   // Validate amount
   if (amount < guild.minBet) {
@@ -63,9 +63,9 @@ async function handleBetModal(interaction: ModalSubmitInteraction) {
     return;
   }
 
-  if (amount > user.pointsBalance) {
+  if (amount > member.pointsBalance) {
     await interaction.editReply({
-      content: `You only have **${user.pointsBalance.toLocaleString()}** points. Can't bet ${amount.toLocaleString()}.`,
+      content: `You only have **${member.pointsBalance.toLocaleString()}** points. Can't bet ${amount.toLocaleString()}.`,
     });
     return;
   }

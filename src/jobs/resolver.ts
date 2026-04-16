@@ -1,7 +1,7 @@
 import * as cron from "node-cron";
 import { and, eq, or, lte, gte, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { bets, markets, users } from "../db/schema.js";
+import { bets, markets, guildMembers } from "../db/schema.js";
 import { getMarketByConditionId } from "../services/polymarket.js";
 import { resolveMarketBets, resolveEventBets } from "../services/betting.js";
 import { config } from "../config.js";
@@ -122,7 +122,6 @@ async function runResolutionCheck() {
           .update(markets)
           .set({
             status: "resolved",
-            resolvedOutcome: winningOutcome,
             currentYesPrice: String(prices[0]),
             currentNoPrice: String(prices[1]),
             updatedAt: new Date(),
@@ -199,14 +198,19 @@ async function handleCancelledMarket(marketId: number) {
         .set({ status: "cancelled", updatedAt: now })
         .where(eq(markets.id, marketId));
 
-      // Give points back
+      // Give points back to the guild member for this user+guild
       await tx
-        .update(users)
+        .update(guildMembers)
         .set({
-          pointsBalance: sql`${users.pointsBalance} + ${bet.amount}`,
+          pointsBalance: sql`${guildMembers.pointsBalance} + ${bet.amount}`,
           updatedAt: now,
         })
-        .where(eq(users.id, bet.userId));
+        .where(
+          and(
+            eq(guildMembers.userId, bet.userId),
+            eq(guildMembers.guildId, bet.guildId)
+          )
+        );
     });
   }
 

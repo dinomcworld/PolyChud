@@ -20,15 +20,7 @@ export const events = pgTable(
     polymarketEventId: varchar("polymarket_event_id", { length: 255 })
       .notNull()
       .unique(),
-    title: text("title").notNull(),
-    slug: varchar("slug", { length: 512 }),
-    description: text("description"),
-    imageUrl: text("image_url"),
-    endDate: timestamp("end_date", { withTimezone: true }),
     status: varchar("status", { length: 20 }).notNull().default("active"),
-    negRisk: boolean("neg_risk").notNull().default(false),
-    marketCount: integer("market_count").notNull().default(0),
-    lastPolledAt: timestamp("last_polled_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -36,10 +28,7 @@ export const events = pgTable(
       .notNull()
       .defaultNow(),
   },
-  (table) => [
-    index("idx_events_status").on(table.status),
-    index("idx_events_end_date").on(table.endDate),
-  ]
+  (table) => [index("idx_events_status").on(table.status)]
 );
 
 // ─── Markets ──────────────────────────────────────────────────────────────────
@@ -52,8 +41,6 @@ export const markets = pgTable(
       .notNull()
       .unique(),
     question: text("question").notNull(),
-    outcomeLabel: varchar("outcome_label", { length: 255 }),
-    slug: varchar("slug", { length: 512 }),
     yesTokenId: varchar("yes_token_id", { length: 255 }),
     noTokenId: varchar("no_token_id", { length: 255 }),
     currentYesPrice: decimal("current_yes_price", {
@@ -66,17 +53,6 @@ export const markets = pgTable(
     }).default("0.5000"),
     endDate: timestamp("end_date", { withTimezone: true }),
     status: varchar("status", { length: 20 }).notNull().default("active"),
-    resolvedOutcome: varchar("resolved_outcome", { length: 10 }),
-    volume24h: decimal("volume_24h", { precision: 18, scale: 2 }),
-    oneHourPriceChange: decimal("one_hour_price_change", {
-      precision: 10,
-      scale: 6,
-    }),
-    oneDayPriceChange: decimal("one_day_price_change", {
-      precision: 10,
-      scale: 6,
-    }),
-    lastPolledAt: timestamp("last_polled_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -97,6 +73,25 @@ export const users = pgTable(
   {
     id: serial("id").primaryKey(),
     discordId: varchar("discord_id", { length: 20 }).notNull().unique(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [uniqueIndex("idx_users_discord_id").on(table.discordId)]
+);
+
+// ─── Guild Members (per-guild user state) ────────────────────────────────────
+export const guildMembers = pgTable(
+  "guild_members",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id),
+    guildId: varchar("guild_id", { length: 20 }).notNull(),
     pointsBalance: integer("points_balance").notNull().default(1000),
     accumulatedPct: decimal("accumulated_pct", {
       precision: 10,
@@ -115,7 +110,10 @@ export const users = pgTable(
       .notNull()
       .defaultNow(),
   },
-  (table) => [uniqueIndex("idx_users_discord_id").on(table.discordId)]
+  (table) => [
+    uniqueIndex("idx_guild_members_user_guild").on(table.userId, table.guildId),
+    index("idx_guild_members_guild_id").on(table.guildId),
+  ]
 );
 
 // ─── Bets ─────────────────────────────────────────────────────────────────────
@@ -193,6 +191,14 @@ export const marketsRelations = relations(markets, ({ one, many }) => ({
 
 export const usersRelations = relations(users, ({ many }) => ({
   bets: many(bets),
+  guildMembers: many(guildMembers),
+}));
+
+export const guildMembersRelations = relations(guildMembers, ({ one }) => ({
+  user: one(users, {
+    fields: [guildMembers.userId],
+    references: [users.id],
+  }),
 }));
 
 export const betsRelations = relations(bets, ({ one }) => ({

@@ -2,7 +2,7 @@ import { EmbedBuilder, SlashCommandBuilder } from "discord.js";
 import { eq } from "drizzle-orm";
 import type { Command } from "./types.js";
 import { db } from "../db/index.js";
-import { bets, users } from "../db/schema.js";
+import { guildMembers, users } from "../db/schema.js";
 
 export const leaderboardCommand: Command = {
   data: new SlashCommandBuilder()
@@ -26,46 +26,42 @@ export const leaderboardCommand: Command = {
     const sort = interaction.options.getString("sort") || "points";
     const guildId = interaction.guildId!;
 
-    // Get distinct user IDs who have placed bets in this guild
-    const guildUserRows = await db
-      .selectDistinct({ userId: bets.userId })
-      .from(bets)
-      .where(eq(bets.guildId, guildId));
+    // Get all guild members for this guild
+    const members = await db.query.guildMembers.findMany({
+      where: eq(guildMembers.guildId, guildId),
+      with: { user: true },
+    });
 
-    const guildUserIds = guildUserRows.map((r) => r.userId);
-
-    if (guildUserIds.length === 0) {
+    if (members.length === 0) {
       await interaction.editReply({
         content: "No one has placed any bets in this server yet!",
       });
       return;
     }
 
-    // Fetch those users
-    const allUsers = await db.query.users.findMany();
-    const guildUsers = allUsers.filter((u) => guildUserIds.includes(u.id));
+    type MemberWithUser = (typeof members)[number];
 
     // Sort based on mode
-    let sorted: typeof guildUsers;
+    let sorted: MemberWithUser[];
     let title: string;
-    let formatValue: (u: (typeof guildUsers)[number]) => string;
+    let formatValue: (m: MemberWithUser) => string;
 
     switch (sort) {
       case "skill":
-        sorted = [...guildUsers].sort(
+        sorted = [...members].sort(
           (a, b) => parseFloat(b.accumulatedPct) - parseFloat(a.accumulatedPct)
         );
         title = "Leaderboard — Prediction Skill";
-        formatValue = (u) => {
-          const pct = parseFloat(u.accumulatedPct);
+        formatValue = (m) => {
+          const pct = parseFloat(m.accumulatedPct);
           const sign = pct >= 0 ? "+" : "";
           return `${sign}${pct.toFixed(2)}%`;
         };
         break;
 
       case "average":
-        sorted = [...guildUsers]
-          .filter((u) => u.totalBetsSettled > 0)
+        sorted = [...members]
+          .filter((m) => m.totalBetsSettled > 0)
           .sort((a, b) => {
             const avgA =
               parseFloat(a.accumulatedPct) / a.totalBetsSettled;
@@ -74,19 +70,19 @@ export const leaderboardCommand: Command = {
             return avgB - avgA;
           });
         title = "Leaderboard — Average Per Bet";
-        formatValue = (u) => {
-          const avg = parseFloat(u.accumulatedPct) / u.totalBetsSettled;
+        formatValue = (m) => {
+          const avg = parseFloat(m.accumulatedPct) / m.totalBetsSettled;
           const sign = avg >= 0 ? "+" : "";
-          return `${sign}${avg.toFixed(2)}% (${u.totalBetsSettled} bets)`;
+          return `${sign}${avg.toFixed(2)}% (${m.totalBetsSettled} bets)`;
         };
         break;
 
       default: // "points"
-        sorted = [...guildUsers].sort(
+        sorted = [...members].sort(
           (a, b) => b.pointsBalance - a.pointsBalance
         );
         title = "Leaderboard — Points";
-        formatValue = (u) => `${u.pointsBalance.toLocaleString()} pts`;
+        formatValue = (m) => `${m.pointsBalance.toLocaleString()} pts`;
         break;
     }
 
@@ -98,9 +94,9 @@ export const leaderboardCommand: Command = {
     }
 
     const medals = ["🥇", "🥈", "🥉"];
-    const lines = sorted.slice(0, 10).map((u, i) => {
+    const lines = sorted.slice(0, 10).map((m, i) => {
       const rank = i < 3 ? medals[i] : `**${i + 1}.**`;
-      return `${rank} <@${u.discordId}> — ${formatValue(u)}`;
+      return `${rank} <@${m.user.discordId}> — ${formatValue(m)}`;
     });
 
     const embed = new EmbedBuilder()

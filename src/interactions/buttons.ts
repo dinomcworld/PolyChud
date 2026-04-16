@@ -319,7 +319,7 @@ async function handleCloseBet(interaction: ButtonInteraction) {
     }
 
     // Verify ownership
-    const user = await ensureUser(interaction.user.id, interaction.guildId!);
+    const { user } = await ensureUser(interaction.user.id, interaction.guildId!);
     if (bet.userId !== user.id) {
       await interaction.editReply({ content: "This isn't your bet." });
       return;
