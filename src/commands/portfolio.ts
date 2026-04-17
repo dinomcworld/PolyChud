@@ -1,4 +1,4 @@
-import { EmbedBuilder, SlashCommandBuilder } from "discord.js";
+import { EmbedBuilder, MessageFlags, SlashCommandBuilder } from "discord.js";
 import { getUserActiveBets } from "../services/betting.js";
 import { getUserStats } from "../services/users.js";
 import { requireGuildId } from "../utils/guards.js";
@@ -10,7 +10,7 @@ export const portfolioCommand: Command = {
     .setDescription("View your betting portfolio and stats"),
 
   async execute(interaction) {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     const guildId = await requireGuildId(interaction);
     if (!guildId) return;

@@ -3,6 +3,7 @@ import {
   ButtonBuilder,
   ButtonStyle,
   EmbedBuilder,
+  MessageFlags,
   SlashCommandBuilder,
 } from "discord.js";
 import { getUserActiveBets } from "../services/betting.js";
@@ -30,7 +31,7 @@ export const betCommand: Command = {
 async function handleBetList(
   interaction: import("discord.js").ChatInputCommandInteraction,
 ) {
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   const guildId = await requireGuildId(interaction);
   if (!guildId) return;

@@ -4,6 +4,7 @@ import {
   Collection,
   Events,
   GatewayIntentBits,
+  MessageFlags,
 } from "discord.js";
 import { betCommand } from "./commands/bet.js";
 // Import commands
@@ -79,7 +80,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     logger.error("Interaction handler error:", error);
     const reply = {
       content: "Something went wrong. Please try again.",
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral as const,
     };
     try {
       if (interaction.isRepliable()) {
