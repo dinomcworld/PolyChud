@@ -206,6 +206,7 @@ function safeJsonParse<T>(str: string | T | null | undefined, fallback: T): T {
 // ─── Gamma API ────────────────────────────────────────────────────────────────
 
 export async function searchMarkets(query: string): Promise<GammaEvent[]> {
+  logger.debug(`search: query=${JSON.stringify(query)}`);
   const url = `${config.POLYMARKET_GAMMA_URL}/public-search?q=${encodeURIComponent(query)}&limit_per_type=10`;
   const response = await fetchWithRetry(url);
   const data = (await response.json()) as {
@@ -227,6 +228,9 @@ export async function searchMarkets(query: string): Promise<GammaEvent[]> {
     results.push(parsed);
   }
 
+  logger.debug(
+    `search: query=${JSON.stringify(query)} -> ${results.length} events`,
+  );
   return results;
 }
 

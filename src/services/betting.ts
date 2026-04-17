@@ -147,6 +147,10 @@ export async function placeBet(
       })
       .where(eq(markets.id, marketId));
 
+    logger.info(
+      `bet placed: betId=${result.betId} user=${discordId} guild=${guildId} marketId=${marketId} outcome=${outcome} stake=${amount} entry=${price.toFixed(4)} payout=${potentialPayout} balance=${result.newBalance}`,
+    );
+
     return {
       success: true,
       betId: result.betId,
