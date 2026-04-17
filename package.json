@@ -3,21 +3,25 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "tsx --watch src/index.ts",
-    "build": "tsc",
-    "start": "node dist/index.js",
-    "deploy-commands": "tsx src/deploy-commands.ts",
+    "dev": "bun --watch src/index.ts",
+    "build": "bun build src/index.ts src/deploy-commands.ts --target=bun --outdir=dist --minify --sourcemap=linked --production",
+    "start": "bun dist/index.js",
+    "deploy-commands": "bun src/deploy-commands.ts",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx src/db/migrate.ts",
     "typecheck": "tsc --noEmit",
     "lint": "biome check",
     "lint:fix": "biome check --write",
-    "format": "biome format --write"
+    "format": "biome format --write",
+    "prepare": "simple-git-hooks"
+  },
+  "simple-git-hooks": {
+    "pre-commit": "bunx biome check --staged --no-errors-on-unmatched --write && git update-index --again"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.12",
     "@types/node": "^25.6.0",
     "drizzle-kit": "^0.31.10",
+    "simple-git-hooks": "^2.13.1",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3"
   },

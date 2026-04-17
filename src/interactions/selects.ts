@@ -1,4 +1,4 @@
-import type { StringSelectMenuInteraction } from "discord.js";
+import { MessageFlags, type StringSelectMenuInteraction } from "discord.js";
 import {
   buildEventCardFromGamma,
   gammaMarketToCardData,
@@ -28,7 +28,7 @@ export async function handleSelectMenu(
   } else {
     await interaction.reply({
       content: "This menu isn't implemented yet.",
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   }
 }
@@ -50,7 +50,7 @@ async function handleMarketSelect(interaction: StringSelectMenuInteraction) {
       await interaction.followUp({
         content:
           "Market not found. The cache may have expired — try searching again.",
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -96,7 +96,7 @@ async function handleMarketSelect(interaction: StringSelectMenuInteraction) {
     logger.error("Market select failed:", err);
     await interaction.followUp({
       content: "Couldn't load that market. Try again.",
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   }
 }
@@ -119,7 +119,7 @@ async function handleEventSelect(interaction: StringSelectMenuInteraction) {
     if (!gamma) {
       await interaction.followUp({
         content: "Market not found.",
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -144,7 +144,7 @@ async function handleEventSelect(interaction: StringSelectMenuInteraction) {
     logger.error("Event select failed:", err);
     await interaction.followUp({
       content: "Couldn't load that market. Try again.",
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   }
 }

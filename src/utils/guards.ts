@@ -1,4 +1,4 @@
-import type { RepliableInteraction } from "discord.js";
+import { MessageFlags, type RepliableInteraction } from "discord.js";
 
 export async function requireGuildId(
   interaction: RepliableInteraction,
@@ -9,7 +9,7 @@ export async function requireGuildId(
   if (interaction.deferred || interaction.replied) {
     await interaction.editReply({ content });
   } else {
-    await interaction.reply({ content, ephemeral: true });
+    await interaction.reply({ content, flags: MessageFlags.Ephemeral });
   }
   return null;
 }

@@ -1,4 +1,4 @@
-import { EmbedBuilder, SlashCommandBuilder } from "discord.js";
+import { EmbedBuilder, MessageFlags, SlashCommandBuilder } from "discord.js";
 import { claimDaily } from "../services/users.js";
 import { requireGuildId } from "../utils/guards.js";
 import type { Command } from "./types.js";
@@ -9,7 +9,7 @@ export const dailyCommand: Command = {
     .setDescription("Claim your daily bonus points"),
 
   async execute(interaction) {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     const guildId = await requireGuildId(interaction);
     if (!guildId) return;

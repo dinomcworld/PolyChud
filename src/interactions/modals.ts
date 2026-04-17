@@ -3,6 +3,7 @@ import {
   ButtonBuilder,
   ButtonStyle,
   EmbedBuilder,
+  MessageFlags,
   type ModalSubmitInteraction,
 } from "discord.js";
 import { config } from "../config.js";
@@ -23,13 +24,13 @@ export async function handleModal(interaction: ModalSubmitInteraction) {
   } else {
     await interaction.reply({
       content: "This form isn't implemented yet.",
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   }
 }
 
 async function handleBetModal(interaction: ModalSubmitInteraction) {
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   // betmodal_{conditionId}_{outcome}
   const [, conditionId, outcome] = interaction.customId.split("_") as [

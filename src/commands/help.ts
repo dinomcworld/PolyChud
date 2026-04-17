@@ -1,4 +1,4 @@
-import { EmbedBuilder, SlashCommandBuilder } from "discord.js";
+import { EmbedBuilder, MessageFlags, SlashCommandBuilder } from "discord.js";
 import type { Command } from "./types.js";
 
 export const helpCommand: Command = {
@@ -53,6 +53,6 @@ export const helpCommand: Command = {
         text: "Data from Polymarket • Virtual points only, not real money",
       });
 
-    await interaction.reply({ embeds: [embed], ephemeral: true });
+    await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
   },
 };

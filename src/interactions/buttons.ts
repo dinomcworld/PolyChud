@@ -4,6 +4,7 @@ import {
   type ButtonInteraction,
   ButtonStyle,
   EmbedBuilder,
+  MessageFlags,
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
@@ -63,7 +64,7 @@ export async function handleButton(interaction: ButtonInteraction) {
   } else {
     await interaction.reply({
       content: "This button isn't implemented yet.",
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   }
 }
@@ -137,7 +138,7 @@ async function handleRefresh(interaction: ButtonInteraction) {
     if (!gamma) {
       await interaction.followUp({
         content: "Market not found.",
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -161,7 +162,7 @@ async function handleRefresh(interaction: ButtonInteraction) {
     logger.error("Refresh failed:", err);
     await interaction.followUp({
       content: "Couldn't refresh prices. Try again.",
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   }
 }
@@ -176,7 +177,7 @@ async function handleRefreshEvent(interaction: ButtonInteraction) {
     if (!gammaEvent || gammaEvent.markets.length === 0) {
       await interaction.followUp({
         content: "Event not found.",
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -201,7 +202,7 @@ async function handleRefreshEvent(interaction: ButtonInteraction) {
     logger.error("Event refresh failed:", err);
     await interaction.followUp({
       content: "Couldn't refresh event. Try again.",
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   }
 }
@@ -216,7 +217,7 @@ async function handleBackToEvent(interaction: ButtonInteraction) {
     if (!gammaEvent || gammaEvent.markets.length === 0) {
       await interaction.followUp({
         content: "Event not found.",
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -241,7 +242,7 @@ async function handleBackToEvent(interaction: ButtonInteraction) {
     logger.error("Back to event failed:", err);
     await interaction.followUp({
       content: "Couldn't load event. Try again.",
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   }
 }
@@ -326,7 +327,7 @@ async function handleConfirm(interaction: ButtonInteraction) {
 }
 
 async function handleCloseBet(interaction: ButtonInteraction) {
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   // close_bet_{betId}
   const betIdStr = interaction.customId.split("_")[2];
@@ -552,7 +553,7 @@ async function handleToggleResolved(interaction: ButtonInteraction) {
     if (!gammaEvent || gammaEvent.markets.length === 0) {
       await interaction.followUp({
         content: "Event not found.",
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -577,7 +578,7 @@ async function handleToggleResolved(interaction: ButtonInteraction) {
     logger.error("Toggle resolved failed:", err);
     await interaction.followUp({
       content: "Couldn't update view. Try again.",
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   }
 }
