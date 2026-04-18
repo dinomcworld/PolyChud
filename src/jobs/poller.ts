@@ -62,23 +62,39 @@ async function runPollCycle(): Promise<number> {
 
   if (trackedMarkets.length === 0) return config.POLL_CYCLE_MS;
 
-  // Spread polls evenly: cycle_time / market_count
-  const interval = Math.floor(config.POLL_CYCLE_MS / trackedMarkets.length);
+  const pollable = trackedMarkets.filter((m) => m.yesTokenId);
+  if (pollable.length === 0) return config.POLL_CYCLE_MS;
+
+  const batchSize = config.POLL_MAX_BATCH_SIZE;
+  const batches: (typeof pollable)[] = [];
+  for (let i = 0; i < pollable.length; i += batchSize) {
+    batches.push(pollable.slice(i, i + batchSize));
+  }
+
+  // Spread batches evenly across the cycle
+  const interval = Math.floor(config.POLL_CYCLE_MS / batches.length);
 
   logger.info(
-    `Polling ${trackedMarkets.length} markets, one every ${Math.round(interval / 1000)}s (${Math.round(config.POLL_CYCLE_MS / 60000)}min cycle)`,
+    `Polling ${pollable.length} markets in ${batches.length} batch(es) of up to ${batchSize}, one every ${Math.round(interval / 1000)}s (${Math.round(config.POLL_CYCLE_MS / 60000)}min cycle)`,
   );
 
-  for (const market of trackedMarkets) {
+  for (let b = 0; b < batches.length; b++) {
     if (stopped) break;
+    const batch = batches[b];
+    if (!batch) continue;
 
-    if (!market.yesTokenId) continue;
+    const tokenToMarket = new Map<string, (typeof batch)[number]>();
+    for (const m of batch) {
+      if (m.yesTokenId) tokenToMarket.set(m.yesTokenId, m);
+    }
 
     try {
-      const prices = await getBatchPrices([market.yesTokenId]);
-      const yesPrice = prices.get(market.yesTokenId);
+      const prices = await getBatchPrices([...tokenToMarket.keys()]);
 
-      if (yesPrice != null) {
+      for (const [tokenId, market] of tokenToMarket) {
+        const yesPrice = prices.get(tokenId);
+        if (yesPrice == null) continue;
+
         await db
           .update(markets)
           .set({
@@ -91,15 +107,16 @@ async function runPollCycle(): Promise<number> {
         logger.debug(`Updated market ${market.id}: yes=${yesPrice.toFixed(4)}`);
       }
     } catch (err) {
-      logger.error(`Price fetch failed for market ${market.id}:`, err);
+      logger.error(
+        `Batch price fetch failed (batch ${b + 1}/${batches.length}):`,
+        err,
+      );
     }
 
-    // Wait before polling next market (skip delay after last one)
-    if (!stopped && market !== trackedMarkets[trackedMarkets.length - 1]) {
+    if (!stopped && b < batches.length - 1) {
       await new Promise((r) => setTimeout(r, interval));
     }
   }
 
-  // Return remaining time in cycle (or 0 if we took longer than the cycle)
   return Math.max(interval, 0);
 }

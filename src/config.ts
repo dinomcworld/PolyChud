@@ -23,6 +23,7 @@ const envSchema = z.object({
     .int()
     .positive()
     .default(30_000),
+  POLL_MAX_BATCH_SIZE: z.coerce.number().int().positive().default(100),
 
   // Points economy
   DEFAULT_STARTING_POINTS: z.coerce.number().int().positive().default(1000),
