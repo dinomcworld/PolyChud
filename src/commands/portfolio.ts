@@ -107,16 +107,34 @@ export function buildPortfolioView(
     )
     .setTimestamp();
 
+  const betsWithPnL = activeBets.map((bet) => {
+    const entryPrice = parseFloat(bet.oddsAtBet);
+    const currentPrice = bet.market
+      ? parseFloat(
+          bet.outcome === "yes"
+            ? bet.market.currentYesPrice || "0.5"
+            : bet.market.currentNoPrice || "0.5",
+        )
+      : entryPrice;
+    const unrealizedPnL =
+      Math.floor(bet.amount * (currentPrice / entryPrice)) - bet.amount;
+    return { bet, unrealizedPnL };
+  });
+
+  betsWithPnL.sort(
+    (a, b) => Math.abs(b.unrealizedPnL) - Math.abs(a.unrealizedPnL),
+  );
+
   const totalPages = Math.max(
     1,
-    Math.ceil(activeBets.length / PORTFOLIO_BETS_PAGE_SIZE),
+    Math.ceil(betsWithPnL.length / PORTFOLIO_BETS_PAGE_SIZE),
   );
   const safePage = Math.min(Math.max(page, 0), totalPages - 1);
   const start = safePage * PORTFOLIO_BETS_PAGE_SIZE;
-  const pageBets = activeBets.slice(start, start + PORTFOLIO_BETS_PAGE_SIZE);
+  const pageBets = betsWithPnL.slice(start, start + PORTFOLIO_BETS_PAGE_SIZE);
 
   if (pageBets.length > 0) {
-    const betLines = pageBets.map((bet) => {
+    const betLines = pageBets.map(({ bet, unrealizedPnL }) => {
       const question = bet.market
         ? bet.market.question.length > 70
           ? `${bet.market.question.slice(0, 67)}...`
@@ -128,17 +146,6 @@ export function buildPortfolioView(
         ? `[${question}](https://polymarket.com/event/${eventSlug})`
         : question;
 
-      const entryPrice = parseFloat(bet.oddsAtBet);
-      const currentPrice = bet.market
-        ? parseFloat(
-            bet.outcome === "yes"
-              ? bet.market.currentYesPrice || "0.5"
-              : bet.market.currentNoPrice || "0.5",
-          )
-        : entryPrice;
-
-      const unrealizedPnL =
-        Math.floor(bet.amount * (currentPrice / entryPrice)) - bet.amount;
       const pnlStr =
         unrealizedPnL >= 0 ? `+${unrealizedPnL}` : `${unrealizedPnL}`;
 
