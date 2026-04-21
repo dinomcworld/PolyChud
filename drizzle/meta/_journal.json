@@ -29,6 +29,13 @@
       "when": 1776429293918,
       "tag": "0003_unusual_outlaw_kid",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1776783465778,
+      "tag": "0004_hot_penance",
+      "breakpoints": true
     }
   ]
 }

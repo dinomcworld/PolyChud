@@ -1,0 +1,1 @@
+ALTER TABLE "guild_members" ADD COLUMN "last_settlements_seen_at" timestamp with time zone;
