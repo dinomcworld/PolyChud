@@ -320,9 +320,15 @@ export async function getMarketByConditionId(
   conditionId: string,
 ): Promise<GammaMarket | null> {
   if (!conditionId) return null;
-  const url = `${config.POLYMARKET_GAMMA_URL}/markets?condition_ids=${encodeURIComponent(conditionId)}`;
-  const response = await fetchWithRetry(url);
-  const raw = (await response.json()) as RawApiObject[];
+  const base = `${config.POLYMARKET_GAMMA_URL}/markets?condition_ids=${encodeURIComponent(conditionId)}`;
+  // Gamma filters to open markets by default — retry with closed=true if empty
+  // so the resolver can see resolved markets.
+  let response = await fetchWithRetry(base);
+  let raw = (await response.json()) as RawApiObject[];
+  if (!raw || raw.length === 0) {
+    response = await fetchWithRetry(`${base}&closed=true`);
+    raw = (await response.json()) as RawApiObject[];
+  }
   const [first] = raw ?? [];
   if (!first) return null;
 

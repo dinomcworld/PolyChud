@@ -1,4 +1,4 @@
-import { and, eq, ne, sql } from "drizzle-orm";
+import { and, eq, gt, ne, or, sql } from "drizzle-orm";
 import { config } from "../config.js";
 import { db } from "../db/index.js";
 import { bets, events, guildMembers, markets, users } from "../db/schema.js";
@@ -206,6 +206,68 @@ export async function getUserSettledBets(discordId: string, guildId?: string) {
   });
 
   return settled;
+}
+
+/**
+ * Fetch bets settled since the user's last-seen marker and advance the marker.
+ * Returns counts + net pts change so callers can surface a passive "while you
+ * were away" notice without sending any push notification.
+ *
+ * First-time callers (marker is null) get no results — we initialize the marker
+ * to now so future settlements are reported from this point forward.
+ */
+export async function consumeNewSettlements(
+  discordId: string,
+  guildId: string,
+): Promise<{ count: number; netPts: number }> {
+  const { user, member } = await ensureUser(discordId, guildId);
+  const now = new Date();
+
+  if (!member.lastSettlementsSeenAt) {
+    await db
+      .update(guildMembers)
+      .set({ lastSettlementsSeenAt: now })
+      .where(eq(guildMembers.id, member.id));
+    return { count: 0, netPts: 0 };
+  }
+
+  const since = member.lastSettlementsSeenAt;
+
+  const newlySettled = await db
+    .select({
+      amount: bets.amount,
+      actualPayout: bets.actualPayout,
+    })
+    .from(bets)
+    .where(
+      and(
+        eq(bets.userId, user.id),
+        eq(bets.guildId, guildId),
+        ne(bets.status, "pending"),
+        or(gt(bets.resolvedAt, since), gt(bets.closedAt, since)),
+      ),
+    );
+
+  if (newlySettled.length === 0) {
+    // Bump the marker anyway so we don't repeat this query work next time.
+    await db
+      .update(guildMembers)
+      .set({ lastSettlementsSeenAt: now })
+      .where(eq(guildMembers.id, member.id));
+    return { count: 0, netPts: 0 };
+  }
+
+  const netPts = newlySettled.reduce(
+    (sum, b) => sum + ((b.actualPayout ?? 0) - b.amount),
+    0,
+  );
+
+  await db
+    .update(guildMembers)
+    .set({ lastSettlementsSeenAt: now })
+    .where(eq(guildMembers.id, member.id));
+
+  return { count: newlySettled.length, netPts };
 }
 
 export async function getBetById(betId: number) {

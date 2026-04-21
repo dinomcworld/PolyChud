@@ -546,7 +546,9 @@ export async function showCloseBetPreview(
     | import("discord.js").StringSelectMenuInteraction,
   betId: number,
 ) {
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  // Public by design: close preview + result are visible to everyone so
+  // others can see the outcome. Ownership is still enforced in the service.
+  await interaction.deferReply();
 
   const guildId = await requireGuildId(interaction);
   if (!guildId) return;

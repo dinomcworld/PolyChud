@@ -1,4 +1,4 @@
-import { and, eq, gte, lte, or, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, lte, or, sql } from "drizzle-orm";
 import * as cron from "node-cron";
 import { config } from "../config.js";
 import { db } from "../db/index.js";
@@ -67,8 +67,8 @@ async function runResolutionCheck() {
           lte(markets.endDate, now),
           // Within 24 hours of end date
           and(lte(markets.endDate, oneDayFromNow), gte(markets.endDate, now)),
-          // Status still active but could be resolved
-          eq(markets.status, "active"),
+          // Still active, or marked closed by upserts but not yet settled here
+          inArray(markets.status, ["active", "closed"]),
         ),
       ),
     });

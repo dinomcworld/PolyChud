@@ -1,5 +1,8 @@
 import {
+  ActionRowBuilder,
   ActivityType,
+  ButtonBuilder,
+  ButtonStyle,
   Client,
   Collection,
   Events,
@@ -21,9 +24,9 @@ import { handleButton } from "./interactions/buttons.js";
 import { handleModal } from "./interactions/modals.js";
 import { handleSelectMenu } from "./interactions/selects.js";
 import { startPoller, stopPoller } from "./jobs/poller.js";
-
 // Import jobs
 import { startResolver, stopResolver } from "./jobs/resolver.js";
+import { consumeNewSettlements } from "./services/betting.js";
 import { logger } from "./utils/logger.js";
 
 // Build command collection
@@ -73,6 +76,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         `command: user=${interaction.user.id} guild=${interaction.guildId ?? "dm"} /${interaction.commandName}${sub ? ` ${sub}` : ""}`,
       );
       await command.execute(interaction);
+      await maybeNotifySettlements(interaction);
     } else if (interaction.isButton()) {
       await handleButton(interaction);
     } else if (interaction.isStringSelectMenu()) {
@@ -99,6 +103,42 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
   }
 });
+
+/**
+ * Pull-on-interact: after a slash command, quietly check whether any of the
+ * user's bets have settled since we last told them, and if so, tack on an
+ * ephemeral followUp. No push notifications — the user only hears about it
+ * when they interact on their own.
+ */
+async function maybeNotifySettlements(
+  interaction: import("discord.js").ChatInputCommandInteraction,
+) {
+  if (!interaction.guildId) return;
+
+  try {
+    const result = await consumeNewSettlements(
+      interaction.user.id,
+      interaction.guildId,
+    );
+    if (result.count === 0) return;
+
+    const sign = result.netPts >= 0 ? "+" : "";
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`portfolio_toggle_${interaction.user.id}_settled`)
+        .setLabel("Show Settled")
+        .setStyle(ButtonStyle.Secondary),
+    );
+
+    await interaction.followUp({
+      content: `📬 ${result.count} bet${result.count === 1 ? "" : "s"} settled while you were away (${sign}${result.netPts.toLocaleString()} pts).`,
+      components: [row],
+      flags: MessageFlags.Ephemeral,
+    });
+  } catch (err) {
+    logger.error("settlement notice failed:", err);
+  }
+}
 
 // ─── Graceful shutdown ───────────────────────────────────────────────────────
 

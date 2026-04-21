@@ -106,6 +106,9 @@ export const guildMembers = pgTable(
     totalWon: integer("total_won").notNull().default(0),
     totalLost: integer("total_lost").notNull().default(0),
     lastDailyClaim: timestamp("last_daily_claim", { withTimezone: true }),
+    lastSettlementsSeenAt: timestamp("last_settlements_seen_at", {
+      withTimezone: true,
+    }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
