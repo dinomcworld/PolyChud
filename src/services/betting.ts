@@ -302,6 +302,29 @@ export async function getBetById(betId: number) {
 
 // ─── Early Close ─────────────────────────────────────────────────────────────
 
+export interface CloseQuote {
+  cashOut: number;
+  profit: number;
+  priceDelta: number;
+}
+
+/** Pure cash-out math, capped by MAX_PAYOUT_MULTIPLIER. Used by the close
+ * preview UI and the actual closeBet execution so they can't drift apart. */
+export function computeCloseQuote(
+  amount: number,
+  entryPrice: number,
+  currentPrice: number,
+): CloseQuote {
+  const rawCashOut = amount * (currentPrice / entryPrice);
+  const cap = amount * config.MAX_PAYOUT_MULTIPLIER;
+  const cashOut = Math.floor(Math.min(rawCashOut, cap));
+  return {
+    cashOut,
+    profit: cashOut - amount,
+    priceDelta: currentPrice - entryPrice,
+  };
+}
+
 export interface CloseBetSuccess {
   success: true;
   question: string;
@@ -369,10 +392,11 @@ export async function closeBet(
 
       const currentPrice = await getMidpointPrice(tokenId);
       const entryPrice = parseFloat(lockedBet.oddsAtBet);
-      const rawCashOut = lockedBet.amount * (currentPrice / entryPrice);
-      const cashOutCap = lockedBet.amount * config.MAX_PAYOUT_MULTIPLIER;
-      const cashOutAmount = Math.floor(Math.min(rawCashOut, cashOutCap));
-      const priceDelta = currentPrice - entryPrice;
+      const { cashOut: cashOutAmount, priceDelta } = computeCloseQuote(
+        lockedBet.amount,
+        entryPrice,
+        currentPrice,
+      );
 
       const now = new Date();
 
