@@ -210,10 +210,26 @@ export async function getUserSettledBets(discordId: string, guildId?: string) {
   return settled;
 }
 
+export interface NewSettlement {
+  betId: number;
+  outcome: "yes" | "no";
+  status: string;
+  amount: number;
+  actualPayout: number;
+  oddsAtBet: string;
+  closePrice: string | null;
+  marketQuestion: string;
+  marketConditionId: string;
+  eventSlug: string | null;
+}
+
 /**
- * Fetch bets settled since the user's last-seen marker and advance the marker.
- * Returns counts + net pts change so callers can surface a passive "while you
- * were away" notice without sending any push notification.
+ * Fetch bets auto-settled since the user's last-seen marker and advance the
+ * marker. Returns the settled bets + net pts change so callers can surface a
+ * passive "while you were away" notice without sending any push notification.
+ *
+ * Excludes `closed_early` bets since those are user-initiated and the user
+ * already saw the close card.
  *
  * First-time callers (marker is null) get no results — we initialize the marker
  * to now so future settlements are reported from this point forward.
@@ -221,7 +237,7 @@ export async function getUserSettledBets(discordId: string, guildId?: string) {
 export async function consumeNewSettlements(
   discordId: string,
   guildId: string,
-): Promise<{ count: number; netPts: number }> {
+): Promise<{ count: number; netPts: number; settlements: NewSettlement[] }> {
   const { user, member } = await ensureUser(discordId, guildId);
   const now = new Date();
 
@@ -230,25 +246,26 @@ export async function consumeNewSettlements(
       .update(guildMembers)
       .set({ lastSettlementsSeenAt: now })
       .where(eq(guildMembers.id, member.id));
-    return { count: 0, netPts: 0 };
+    return { count: 0, netPts: 0, settlements: [] };
   }
 
   const since = member.lastSettlementsSeenAt;
 
-  const newlySettled = await db
-    .select({
-      amount: bets.amount,
-      actualPayout: bets.actualPayout,
-    })
-    .from(bets)
-    .where(
-      and(
-        eq(bets.userId, user.id),
-        eq(bets.guildId, guildId),
-        ne(bets.status, "pending"),
-        or(gt(bets.resolvedAt, since), gt(bets.closedAt, since)),
-      ),
-    );
+  const newlySettled = await db.query.bets.findMany({
+    where: and(
+      eq(bets.userId, user.id),
+      eq(bets.guildId, guildId),
+      ne(bets.status, "pending"),
+      ne(bets.status, "closed_early"),
+      or(gt(bets.resolvedAt, since), gt(bets.closedAt, since)),
+    ),
+    with: { market: { with: { event: true } } },
+    orderBy: (bets, { desc }) => [
+      desc(bets.resolvedAt),
+      desc(bets.closedAt),
+      desc(bets.placedAt),
+    ],
+  });
 
   if (newlySettled.length === 0) {
     // Bump the marker anyway so we don't repeat this query work next time.
@@ -256,7 +273,7 @@ export async function consumeNewSettlements(
       .update(guildMembers)
       .set({ lastSettlementsSeenAt: now })
       .where(eq(guildMembers.id, member.id));
-    return { count: 0, netPts: 0 };
+    return { count: 0, netPts: 0, settlements: [] };
   }
 
   const netPts = newlySettled.reduce(
@@ -264,12 +281,25 @@ export async function consumeNewSettlements(
     0,
   );
 
+  const settlements: NewSettlement[] = newlySettled.map((b) => ({
+    betId: b.id,
+    outcome: b.outcome as "yes" | "no",
+    status: b.status,
+    amount: b.amount,
+    actualPayout: b.actualPayout ?? 0,
+    oddsAtBet: b.oddsAtBet,
+    closePrice: b.closePrice,
+    marketQuestion: b.market?.question ?? "(unknown market)",
+    marketConditionId: b.market?.polymarketConditionId ?? "",
+    eventSlug: b.market?.event?.slug ?? null,
+  }));
+
   await db
     .update(guildMembers)
     .set({ lastSettlementsSeenAt: now })
     .where(eq(guildMembers.id, member.id));
 
-  return { count: newlySettled.length, netPts };
+  return { count: newlySettled.length, netPts, settlements };
 }
 
 export async function getBetById(betId: number) {

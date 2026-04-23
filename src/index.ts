@@ -1,10 +1,8 @@
 import {
-  ActionRowBuilder,
   ActivityType,
-  ButtonBuilder,
-  ButtonStyle,
   Client,
   Collection,
+  EmbedBuilder,
   Events,
   GatewayIntentBits,
   MessageFlags,
@@ -27,6 +25,11 @@ import { startPoller, stopPoller } from "./jobs/poller.js";
 // Import jobs
 import { startResolver, stopResolver } from "./jobs/resolver.js";
 import { consumeNewSettlements } from "./services/betting.js";
+import {
+  getCachedMarket,
+  getMarketByConditionId,
+} from "./services/polymarket.js";
+import { escapeMarkdown } from "./ui/marketCard.js";
 import { logger } from "./utils/logger.js";
 
 // Build command collection
@@ -105,10 +108,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
 });
 
 /**
- * Pull-on-interact: after a slash command, quietly check whether any of the
- * user's bets have settled since we last told them, and if so, tack on an
- * ephemeral followUp. No push notifications — the user only hears about it
- * when they interact on their own.
+ * Pull-on-interact: after a slash command, check whether any of the user's
+ * bets have been auto-settled (won/lost/cancelled) since we last told them,
+ * and if so, post a public followUp card listing them. Self-closed bets
+ * (closed_early) are excluded — the user already saw the close card.
  */
 async function maybeNotifySettlements(
   interaction: import("discord.js").ChatInputCommandInteraction,
@@ -123,18 +126,78 @@ async function maybeNotifySettlements(
     if (result.count === 0) return;
 
     const sign = result.netPts >= 0 ? "+" : "";
-    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`portfolio_toggle_${interaction.user.id}_settled`)
-        .setLabel("Show Settled")
-        .setStyle(ButtonStyle.Secondary),
-    );
+    const color = result.netPts >= 0 ? 0x00cc66 : 0xff4444;
 
-    await interaction.followUp({
-      content: `📬 ${result.count} bet${result.count === 1 ? "" : "s"} settled while you were away (${sign}${result.netPts.toLocaleString()} pts).`,
-      components: [row],
-      flags: MessageFlags.Ephemeral,
+    const entries = result.settlements.map((s) => {
+      const statusLabel =
+        s.status === "won"
+          ? "WON"
+          : s.status === "lost"
+            ? "LOST"
+            : s.status === "cancelled"
+              ? "REFUNDED"
+              : s.status.toUpperCase();
+      const pnl = s.actualPayout - s.amount;
+      const pnlStr =
+        pnl >= 0 ? `+${pnl.toLocaleString()}` : pnl.toLocaleString();
+      const trimmed =
+        s.marketQuestion.length > 120
+          ? `${s.marketQuestion.slice(0, 117)}...`
+          : s.marketQuestion;
+      const marketTitle = escapeMarkdown(trimmed);
+      const marketLine = s.eventSlug
+        ? `[${marketTitle}](https://polymarket.com/event/${s.eventSlug})`
+        : marketTitle;
+      return [
+        `**${marketLine}**`,
+        `#${s.betId} — ${s.outcome.toUpperCase()} · ${statusLabel} · Stake **${s.amount.toLocaleString()}** → **${s.actualPayout.toLocaleString()}** pts (**${pnlStr}**)`,
+      ].join("\n");
     });
+
+    const MAX_DESC = 3800;
+    const descLines: string[] = [];
+    let used = 0;
+    let shown = 0;
+    for (const e of entries) {
+      const addLen = e.length + (descLines.length > 0 ? 2 : 0);
+      if (used + addLen > MAX_DESC) break;
+      descLines.push(e);
+      used += addLen;
+      shown++;
+    }
+    const remaining = entries.length - shown;
+    if (remaining > 0) {
+      descLines.push(`_…and ${remaining} more_`);
+    }
+
+    const title =
+      result.count === 1 ? "Bet Settled" : `${result.count} Bets Settled`;
+
+    const embed = new EmbedBuilder()
+      .setTitle(title)
+      .setColor(color)
+      .setAuthor({
+        name: interaction.user.displayName,
+        iconURL: interaction.user.displayAvatarURL(),
+      })
+      .setDescription(descLines.join("\n\n"))
+      .setFooter({ text: `Net ${sign}${result.netPts.toLocaleString()} pts` })
+      .setTimestamp();
+
+    const first = result.settlements[0];
+    if (first?.marketConditionId) {
+      try {
+        const gamma =
+          getCachedMarket(first.marketConditionId) ||
+          (await getMarketByConditionId(first.marketConditionId));
+        const image = gamma?.image || gamma?.icon;
+        if (image) embed.setThumbnail(image);
+      } catch (err) {
+        logger.warn("Failed to attach thumbnail to settlement card", { err });
+      }
+    }
+
+    await interaction.followUp({ embeds: [embed] });
   } catch (err) {
     logger.error("settlement notice failed:", err);
   }
