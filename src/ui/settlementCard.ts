@@ -1,6 +1,8 @@
 import { EmbedBuilder, type User } from "discord.js";
 import type { NewSettlement } from "../services/betting.js";
+import { COLORS } from "./colors.js";
 import { escapeMarkdown } from "./marketCard.js";
+import { truncate } from "./text.js";
 
 export interface SettlementsEmbedInput {
   user: User;
@@ -29,11 +31,7 @@ function statusLabel(status: string): string {
 function renderEntry(s: NewSettlement): string {
   const pnl = s.actualPayout - s.amount;
   const pnlStr = pnl >= 0 ? `+${pnl.toLocaleString()}` : pnl.toLocaleString();
-  const trimmed =
-    s.marketQuestion.length > MAX_QUESTION
-      ? `${s.marketQuestion.slice(0, MAX_QUESTION - 3)}...`
-      : s.marketQuestion;
-  const marketTitle = escapeMarkdown(trimmed);
+  const marketTitle = escapeMarkdown(truncate(s.marketQuestion, MAX_QUESTION));
   const marketLine = s.eventSlug
     ? `[${marketTitle}](https://polymarket.com/event/${s.eventSlug})`
     : marketTitle;
@@ -48,7 +46,7 @@ export function buildSettlementsEmbed(
 ): EmbedBuilder {
   const { user, settlements, netPts, count, thumbnailUrl } = input;
   const sign = netPts >= 0 ? "+" : "";
-  const color = netPts >= 0 ? 0x00cc66 : 0xff4444;
+  const color = netPts >= 0 ? COLORS.GREEN : COLORS.RED;
 
   const entries = settlements.map(renderEntry);
 

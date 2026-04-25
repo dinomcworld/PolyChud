@@ -6,6 +6,7 @@ import {
 } from "discord.js";
 import { confirmClose } from "../interactions/customIds.js";
 import { computeCloseQuote } from "../services/betting.js";
+import { COLORS } from "./colors.js";
 
 export interface ClosePreviewInput {
   betId: number;
@@ -38,7 +39,7 @@ export function buildClosePreviewEmbed(input: ClosePreviewInput): EmbedBuilder {
     .setTitle(
       input.stale ? "Price updated — confirm close?" : "Close bet early?",
     )
-    .setColor(profit >= 0 ? 0x00cc66 : 0xff4444)
+    .setColor(profit >= 0 ? COLORS.GREEN : COLORS.RED)
     .setDescription(
       [
         marketLine,

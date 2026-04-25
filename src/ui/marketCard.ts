@@ -8,6 +8,8 @@ import {
 } from "discord.js";
 import { searchPage, searchResolvedToggle } from "../interactions/customIds.js";
 import type { GammaMarket } from "../services/polymarket.js";
+import { COLORS } from "./colors.js";
+import { truncate } from "./text.js";
 
 export interface MarketCardData {
   conditionId: string;
@@ -59,9 +61,9 @@ export function buildMarketEmbed(market: MarketCardData) {
     : "https://polymarket.com";
 
   const embed = new EmbedBuilder()
-    .setTitle(title.length > 256 ? `${title.slice(0, 253)}...` : title)
+    .setTitle(truncate(title, 256))
     .setURL(marketUrl)
-    .setColor(market.status === "active" ? 0x00cc66 : 0x888888)
+    .setColor(market.status === "active" ? COLORS.GREEN : COLORS.GRAY)
     .setFooter({ text: "Virtual betting \u2022 Not real money" })
     .setTimestamp();
 
@@ -181,8 +183,7 @@ export function buildSearchResultsEmbed(
 
   const lines = pageItems.map((r, i) => {
     const idx = start + i + 1;
-    const trimmed =
-      r.question.length > 80 ? `${r.question.slice(0, 77)}...` : r.question;
+    const trimmed = truncate(r.question, 80);
     const linkText = trimmed.replace(/\[/g, "(").replace(/\]/g, ")");
     const titleLine = r.eventSlug
       ? `**${idx}.** **[${linkText}](https://polymarket.com/event/${r.eventSlug})**`
@@ -221,7 +222,7 @@ export function buildSearchResultsEmbed(
   return new EmbedBuilder()
     .setTitle(`Search: "${query}"`)
     .setDescription(lines.join("\n\n"))
-    .setColor(0x5865f2)
+    .setColor(COLORS.BLUE)
     .setFooter({ text: parts.join(" \u2022 ") });
 }
 

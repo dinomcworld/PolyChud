@@ -16,7 +16,9 @@ import type {
   getUserSettledBets,
 } from "../services/betting.js";
 import type { getUserStats } from "../services/users.js";
+import { signedColor } from "./colors.js";
 import { buildPrevNext, paginate } from "./paginate.js";
+import { truncate } from "./text.js";
 
 type ActiveBet = Awaited<ReturnType<typeof getUserActiveBets>>[number];
 type SettledBet = Awaited<ReturnType<typeof getUserSettledBets>>[number];
@@ -38,7 +40,7 @@ export function buildPortfolioView(
   const totalBets = stats.totalBetsSettled + stats.activeBetsCount;
   const totalAvg = totalBets > 0 ? totalPct / totalBets : 0;
 
-  const pctColor = totalPct > 0 ? 0x00cc66 : totalPct < 0 ? 0xff4444 : 0x888888;
+  const pctColor = signedColor(totalPct);
 
   const signed = (n: number) => `${n >= 0 ? "+" : ""}${n.toLocaleString()}`;
   const signedFixed = (n: number, d = 2) =>
@@ -120,9 +122,7 @@ export function buildPortfolioView(
   if (pageBets.length > 0) {
     const betLines = pageBets.map(({ bet, pnl }) => {
       const question = bet.market
-        ? bet.market.question.length > 70
-          ? `${bet.market.question.slice(0, 67)}...`
-          : bet.market.question
+        ? truncate(bet.market.question, 70)
         : `Market #${bet.marketId}`;
 
       const eventSlug = bet.market?.event?.slug ?? null;

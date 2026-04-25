@@ -11,7 +11,9 @@ import type {
   getUserActiveBets,
   getUserSettledBets,
 } from "../services/betting.js";
+import { COLORS } from "./colors.js";
 import { buildPrevNext, paginate } from "./paginate.js";
+import { truncate } from "./text.js";
 
 type ActiveBet = Awaited<ReturnType<typeof getUserActiveBets>>[number];
 type SettledBet = Awaited<ReturnType<typeof getUserSettledBets>>[number];
@@ -33,7 +35,7 @@ export function buildBetListView(
 
   const embed = new EmbedBuilder()
     .setTitle(mode === "active" ? "Your Active Bets" : "Your Settled Bets")
-    .setColor(0x5865f2)
+    .setColor(COLORS.BLUE)
     .setTimestamp();
 
   const fields = pageBets.map((bet) =>
@@ -71,12 +73,10 @@ export function buildBetListView(
         (pageBets as ActiveBet[]).map((bet) => {
           const label = `#${bet.id} — ${bet.outcome.toUpperCase()} · ${bet.amount.toLocaleString()} pts`;
           const desc = bet.market
-            ? bet.market.question.length > 100
-              ? `${bet.market.question.slice(0, 97)}...`
-              : bet.market.question
+            ? truncate(bet.market.question, 100)
             : `Market #${bet.marketId}`;
           return {
-            label: label.length > 100 ? `${label.slice(0, 97)}...` : label,
+            label: truncate(label, 100),
             description: desc,
             value: String(bet.id),
           };
@@ -106,9 +106,7 @@ export function buildBetListView(
 
 function buildActiveField(bet: ActiveBet) {
   const question = bet.market
-    ? bet.market.question.length > 50
-      ? `${bet.market.question.slice(0, 47)}...`
-      : bet.market.question
+    ? truncate(bet.market.question, 50)
     : `Market #${bet.marketId}`;
 
   const eventSlug = bet.market?.event?.slug ?? null;
@@ -146,9 +144,7 @@ function buildActiveField(bet: ActiveBet) {
 
 function buildSettledField(bet: SettledBet) {
   const question = bet.market
-    ? bet.market.question.length > 50
-      ? `${bet.market.question.slice(0, 47)}...`
-      : bet.market.question
+    ? truncate(bet.market.question, 50)
     : `Market #${bet.marketId}`;
 
   const eventSlug = bet.market?.event?.slug ?? null;

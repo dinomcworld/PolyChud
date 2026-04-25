@@ -31,6 +31,7 @@ import {
   buildClosePreviewComponents,
   buildClosePreviewEmbed,
 } from "../ui/closeCard.js";
+import { COLORS } from "../ui/colors.js";
 import {
   buildBackToEventButton,
   buildEventButtons,
@@ -50,6 +51,7 @@ import {
   gammaMarketToCardData,
 } from "../ui/marketCard.js";
 import { buildPortfolioView } from "../ui/portfolio.js";
+import { truncate } from "../ui/text.js";
 import {
   rememberMarketMessage,
   takeMarketMessage,
@@ -386,14 +388,14 @@ async function handleConfirm(interaction: ButtonInteraction) {
   const marketTitle = escapeMarkdown(rawMarketTitle);
   const embed = new EmbedBuilder()
     .setTitle("Bet Placed!")
-    .setColor(0x00cc66)
+    .setColor(COLORS.GREEN)
     .setAuthor({
       name: interaction.user.displayName,
       iconURL: interaction.user.displayAvatarURL(),
     })
     .setDescription(
       [
-        `**Market:** [${marketTitle.length > 200 ? `${marketTitle.slice(0, 197)}...` : marketTitle}](${marketUrl})`,
+        `**Market:** [${truncate(marketTitle, 200)}](${marketUrl})`,
         `**Outcome:** ${outcome.toUpperCase()} at ${pct}%`,
         `**Stake:** ${amount.toLocaleString()} pts`,
         `**Potential payout:** ${result.potentialPayout.toLocaleString()} pts`,
@@ -705,7 +707,7 @@ async function handleConfirmClose(interaction: ButtonInteraction) {
 
   const embed = new EmbedBuilder()
     .setTitle("Bet Closed")
-    .setColor(result.profit >= 0 ? 0x00cc66 : 0xff4444)
+    .setColor(result.profit >= 0 ? COLORS.GREEN : COLORS.RED)
     .setAuthor({
       name: interaction.user.displayName,
       iconURL: interaction.user.displayAvatarURL(),

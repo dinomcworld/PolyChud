@@ -14,6 +14,7 @@ import {
   getMidpointPrice,
 } from "../services/polymarket.js";
 import { ensureGuildSettings, ensureUser } from "../services/users.js";
+import { COLORS } from "../ui/colors.js";
 import { requireGuildId } from "../utils/guards.js";
 import { logger } from "../utils/logger.js";
 import { betModal, confirmBet } from "./customIds.js";
@@ -136,7 +137,7 @@ async function handleBetModal(interaction: ModalSubmitInteraction) {
   // Show confirmation — pass conditionId in confirm button
   const embed = new EmbedBuilder()
     .setTitle("Confirm your bet")
-    .setColor(0xffaa00)
+    .setColor(COLORS.ORANGE)
     .setDescription(
       [
         `**Market:** ${gamma.question}`,

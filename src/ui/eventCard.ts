@@ -6,7 +6,9 @@ import {
   StringSelectMenuBuilder,
 } from "discord.js";
 import type { GammaEvent } from "../services/polymarket.js";
+import { COLORS } from "./colors.js";
 import { escapeMarkdown, type SearchResultItem } from "./marketCard.js";
+import { truncate } from "./text.js";
 
 export interface EventCardData {
   polyEventId: string;
@@ -64,14 +66,12 @@ export function buildEventEmbed(event: EventCardData, showResolved = false) {
     ? `https://polymarket.com/event/${event.slug}`
     : "https://polymarket.com";
 
-  const rawTitle =
-    event.title.length > 256 ? `${event.title.slice(0, 253)}...` : event.title;
-  const title = escapeMarkdown(rawTitle);
+  const title = escapeMarkdown(truncate(event.title, 256));
 
   const embed = new EmbedBuilder()
     .setTitle(title)
     .setURL(eventUrl)
-    .setColor(event.status === "active" ? 0x5865f2 : 0x888888)
+    .setColor(event.status === "active" ? COLORS.BLUE : COLORS.GRAY)
     .setDescription(description)
     .setFooter({ text: "Select an outcome to bet on" })
     .setTimestamp();
@@ -140,8 +140,7 @@ export function buildEventSelectMenu(
     .addOptions(
       sorted.slice(0, 25).map((o) => {
         const pct = (o.yesPrice * 100).toFixed(1);
-        const label =
-          o.label.length > 100 ? `${o.label.slice(0, 97)}...` : o.label;
+        const label = truncate(o.label, 100);
         const desc =
           o.status === "resolved" || o.status === "closed"
             ? "Resolved"
@@ -226,7 +225,7 @@ export function extractOutcomeLabel(
   if (groupItemTitle) return groupItemTitle;
 
   // Try to extract the subject from common patterns
-  let label = question;
+  const label = question;
 
   // "Will X win/be/become...?" → X
   const willMatch = label.match(
@@ -238,9 +237,7 @@ export function extractOutcomeLabel(
   const toMatch = label.match(/^(.+?)\s+to\s+(?:win|be |become )/i);
   if (toMatch?.[1]) return toMatch[1];
 
-  // Fallback: truncate
-  if (label.length > 40) label = `${label.slice(0, 37)}...`;
-  return label;
+  return truncate(label, 40);
 }
 
 /** Project a Gamma API event into the shape buildEventEmbed expects. */
