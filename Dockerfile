@@ -13,6 +13,9 @@ RUN bun build src/index.ts src/deploy-commands.ts --target=bun --outdir=dist --m
 FROM oven/bun:1-alpine AS production
 WORKDIR /app
 
+# resvg-js (used by the chart renderer)
+RUN apk add --no-cache ttf-dejavu
+
 RUN addgroup -S bot && adduser -S bot -G bot
 
 COPY --from=builder /app/dist ./dist

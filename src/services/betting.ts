@@ -1,7 +1,7 @@
 import { and, eq, gt, ne, or, sql } from "drizzle-orm";
 import { config } from "../config.js";
 import { db } from "../db/index.js";
-import { bets, events, guildMembers, markets, users } from "../db/schema.js";
+import { bets, guildMembers, markets, users } from "../db/schema.js";
 import { logger } from "../utils/logger.js";
 import { getMidpointPrice } from "./polymarket.js";
 import { ensureUser } from "./users.js";
@@ -541,52 +541,4 @@ export async function resolveMarketBets(
     .where(eq(markets.id, marketId));
 
   return settledCount;
-}
-
-/**
- * Resolve all sub-markets of a negRisk event.
- * Identifies the winning sub-market (YES price ≈ 1.0) and resolves all others as NO.
- */
-export async function resolveEventBets(
-  eventDbId: number,
-): Promise<{ totalSettled: number; winningMarketId: number | null }> {
-  const event = await db.query.events.findFirst({
-    where: eq(events.id, eventDbId),
-    with: { markets: true },
-  });
-
-  if (!event) {
-    logger.warn(`resolveEventBets: event ${eventDbId} not found`);
-    return { totalSettled: 0, winningMarketId: null };
-  }
-
-  // Find the winning sub-market: the one with YES price ≈ 1.0
-  let winningMarket: (typeof event.markets)[number] | null = null;
-  for (const m of event.markets) {
-    const yesPrice = parseFloat(m.currentYesPrice || "0");
-    if (yesPrice >= 0.95) {
-      winningMarket = m;
-      break;
-    }
-  }
-
-  let totalSettled = 0;
-
-  for (const m of event.markets) {
-    // If this is the winning sub-market, YES wins
-    // Otherwise, NO wins (the other candidates lost)
-    const winningOutcome: "yes" | "no" =
-      winningMarket && m.id === winningMarket.id ? "yes" : "no";
-
-    const settled = await resolveMarketBets(m.id, winningOutcome);
-    totalSettled += settled;
-  }
-
-  // Mark event as resolved
-  await db
-    .update(events)
-    .set({ status: "resolved", updatedAt: new Date() })
-    .where(eq(events.id, eventDbId));
-
-  return { totalSettled, winningMarketId: winningMarket?.id ?? null };
 }

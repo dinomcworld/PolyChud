@@ -80,9 +80,18 @@ class TTLCache<T> {
 const marketCache = new TTLCache<GammaMarket>();
 const eventCache = new TTLCache<GammaEvent>();
 const priceCache = new TTLCache<number>();
+const historyCache = new TTLCache<PricePoint[]>();
 
 const MARKET_CACHE_TTL = config.ON_DEMAND_CACHE_TTL_MS; // 60s
 const PRICE_CACHE_TTL = 10_000; // 10s
+const HISTORY_CACHE_TTL = 60_000; // 60s — bucket boundaries are coarse anyway
+
+export interface PricePoint {
+  t: number; // unix seconds
+  p: number; // 0..1
+}
+
+export type PriceHistoryInterval = "1h" | "6h" | "1d" | "1w" | "1m" | "max";
 
 // ─── Fetch helpers ────────────────────────────────────────────────────────────
 
@@ -414,6 +423,26 @@ export async function getBatchPrices(
 
 export function invalidatePriceCache(tokenId: string) {
   priceCache.delete(`price:${tokenId}`);
+}
+
+export async function fetchPriceHistory(
+  clobTokenId: string,
+  interval: PriceHistoryInterval = "1w",
+  fidelity = 60,
+): Promise<PricePoint[]> {
+  const key = `hist:${clobTokenId}:${interval}:${fidelity}`;
+  const cached = historyCache.get(key);
+  if (cached) return cached;
+
+  const url =
+    `${config.POLYMARKET_CLOB_URL}/prices-history` +
+    `?market=${encodeURIComponent(clobTokenId)}` +
+    `&interval=${interval}&fidelity=${fidelity}`;
+  const response = await fetchWithRetry(url);
+  const data = (await response.json()) as { history?: PricePoint[] };
+  const points = data.history ?? [];
+  historyCache.set(key, points, HISTORY_CACHE_TTL);
+  return points;
 }
 
 // ─── Cache lookups ───────────────────────────────────────────────────────────

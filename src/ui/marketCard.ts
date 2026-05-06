@@ -121,19 +121,24 @@ export function buildMarketButtons(
     );
   }
 
-  // Embed polyEventId in refresh button so event context survives refresh
-  const refreshId = polyEventId
-    ? `refresh_${conditionId}_evt${polyEventId}`
-    : `refresh_${conditionId}`;
+  // Embed polyEventId in refresh/chart buttons so event context survives.
+  const evtSuffix = polyEventId ? `_evt${polyEventId}` : "";
   row.addComponents(
     new ButtonBuilder()
-      .setCustomId(refreshId)
+      .setCustomId(`refresh_${conditionId}${evtSuffix}`)
       .setLabel("Refresh")
       .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(`chart_${conditionId}${evtSuffix}`)
+      .setLabel("Chart")
+      .setStyle(ButtonStyle.Primary),
   );
 
+  // In event context the caller appends a "Back to Event" button, which would
+  // push this row to 6 components (Discord caps a row at 5). Skip the link
+  // button there — the embed title already links out.
   const linkSlug = eventSlug || slug;
-  if (linkSlug) {
+  if (linkSlug && !polyEventId) {
     row.addComponents(
       new ButtonBuilder()
         .setLabel("Polymarket")

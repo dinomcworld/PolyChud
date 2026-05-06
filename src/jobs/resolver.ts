@@ -3,7 +3,7 @@ import * as cron from "node-cron";
 import { config } from "../config.js";
 import { db } from "../db/index.js";
 import { bets, guildMembers, markets } from "../db/schema.js";
-import { resolveEventBets } from "../services/betting.js";
+import { resolveMarketBets } from "../services/betting.js";
 import { getMarketByConditionId } from "../services/polymarket.js";
 import { logger } from "../utils/logger.js";
 
@@ -77,8 +77,6 @@ async function runResolutionCheck() {
       `Checking ${candidateMarkets.length} markets for resolution...`,
     );
 
-    // Track events we've already processed (for multi-outcome)
-    const processedEvents = new Set<number>();
     let totalSettled = 0;
 
     for (const market of candidateMarkets) {
@@ -112,33 +110,24 @@ async function runResolutionCheck() {
           continue;
         }
 
-        // Determine winner
+        // Each market is resolved independently from its own gamma outcomePrices.
+        // Sibling markets in the same event (incl. negRisk) are picked up by the
+        // candidates loop on their own and resolved on their own outcomes — we
+        // never infer one market's resolution from a sibling's DB price.
         const winningOutcome: "yes" | "no" = prices[0] === 1 ? "yes" : "no";
 
+        const settled = await resolveMarketBets(market.id, winningOutcome);
+        totalSettled += settled;
         logger.info(
-          `Market "${market.question}" resolved: ${winningOutcome} wins`,
+          `Market ${market.id} "${market.question}" resolved: ${winningOutcome} wins, settled ${settled} bets`,
         );
-
-        // Resolve at the event level (handles both single- and multi-outcome events).
-        // resolveMarketBets owns the markets.status + final-price write, so a
-        // crash before completion leaves the market re-picked next cycle.
-        if (!processedEvents.has(market.eventId)) {
-          processedEvents.add(market.eventId);
-          const result = await resolveEventBets(market.eventId);
-          totalSettled += result.totalSettled;
-          logger.info(
-            `Event ${market.eventId}: settled ${result.totalSettled} bets, winner market: ${result.winningMarketId}`,
-          );
-        }
       } catch (err) {
         logger.error(`Error checking resolution for market ${market.id}:`, err);
       }
     }
 
     if (totalSettled > 0) {
-      logger.info(
-        `Resolution check complete: settled ${totalSettled} bets across ${processedEvents.size} events`,
-      );
+      logger.info(`Resolution check complete: settled ${totalSettled} bets`);
     }
   } catch (err) {
     logger.error("Resolution check failed:", err);
