@@ -130,6 +130,10 @@ export function buildMarketButtons(
       .setCustomId(refreshId)
       .setLabel("Refresh")
       .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(`chart_${conditionId}`)
+      .setLabel("Chart")
+      .setStyle(ButtonStyle.Primary),
   );
 
   const linkSlug = eventSlug || slug;

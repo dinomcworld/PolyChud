@@ -1,5 +1,6 @@
 import {
   ActionRowBuilder,
+  AttachmentBuilder,
   type ButtonInteraction,
   EmbedBuilder,
   MessageFlags,
@@ -19,6 +20,7 @@ import {
 } from "../services/betting.js";
 import { upsertStandaloneMarket } from "../services/markets.js";
 import {
+  fetchPriceHistory,
   getCachedMarket,
   getEventById,
   getMarketByConditionId,
@@ -27,6 +29,7 @@ import {
 } from "../services/polymarket.js";
 import { ensureUser, getUserStats } from "../services/users.js";
 import { buildBetListView } from "../ui/betList.js";
+import { renderPriceChart } from "../ui/chart.js";
 import {
   buildClosePreviewComponents,
   buildClosePreviewEmbed,
@@ -94,6 +97,7 @@ const PREFIX_ROUTES: Array<[string, ButtonHandler]> = [
   ["bet_no_", handleBetButton],
   ["refresh_event_", handleRefreshEvent],
   ["refresh_", handleRefresh],
+  ["chart_", handleChart],
   [confirmClose.prefix, handleConfirmClose],
   [confirmBet.prefix, handleConfirm],
   ["close_bet_", handleCloseBet],
@@ -284,6 +288,76 @@ async function handleRefreshEvent(interaction: ButtonInteraction) {
     await interaction.followUp({
       content: "Couldn't refresh event. Try again.",
       flags: MessageFlags.Ephemeral,
+    });
+  }
+}
+
+async function handleChart(interaction: ButtonInteraction) {
+  // Ephemeral so the public market card stays clean — only the clicker sees the chart.
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const conditionId = interaction.customId.slice("chart_".length);
+
+  try {
+    const gamma =
+      getCachedMarket(conditionId) ??
+      (await getMarketByConditionId(conditionId));
+    if (!gamma) {
+      await interaction.editReply({ content: "Market not found." });
+      return;
+    }
+
+    const yesTokenId = gamma.clobTokenIds[0];
+    if (!yesTokenId) {
+      await interaction.editReply({
+        content: "Price history unavailable for this market.",
+      });
+      return;
+    }
+
+    const points = await fetchPriceHistory(yesTokenId, "1w", 60);
+    if (points.length < 2) {
+      await interaction.editReply({
+        content: "Not enough price history yet for this market.",
+      });
+      return;
+    }
+
+    const first = points[0]?.p ?? 0;
+    const last = points[points.length - 1]?.p ?? 0;
+    const direction = last > first ? "up" : last < first ? "down" : "flat";
+
+    const rawTitle = gamma.groupItemTitle
+      ? `${gamma.groupItemTitle} — ${gamma.question}`
+      : gamma.question;
+    const png = renderPriceChart(points, { title: rawTitle, direction });
+    if (!png) {
+      await interaction.editReply({ content: "Couldn't render chart." });
+      return;
+    }
+
+    const file = new AttachmentBuilder(png, { name: "chart.png" });
+    const eventSlug = gamma.events?.[0]?.slug ?? gamma.slug;
+    const marketUrl = eventSlug
+      ? `https://polymarket.com/event/${eventSlug}`
+      : "https://polymarket.com";
+    const embed = new EmbedBuilder()
+      .setTitle(truncate(escapeMarkdown(rawTitle), 256))
+      .setURL(marketUrl)
+      .setColor(
+        direction === "up"
+          ? COLORS.GREEN
+          : direction === "down"
+            ? COLORS.RED
+            : COLORS.GRAY,
+      )
+      .setImage("attachment://chart.png")
+      .setFooter({ text: "1-week price history • Polymarket" });
+
+    await interaction.editReply({ embeds: [embed], files: [file] });
+  } catch (err) {
+    logger.error("Chart render failed:", err);
+    await interaction.editReply({
+      content: "Couldn't load chart. Try again.",
     });
   }
 }
