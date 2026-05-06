@@ -1,6 +1,46 @@
+import { existsSync } from "node:fs";
 import { Resvg } from "@resvg/resvg-js";
 import type { PricePoint } from "../services/polymarket.js";
+import { logger } from "../utils/logger.js";
 import { truncate } from "./text.js";
+
+// Resvg has no fonts of its own. `loadSystemFonts: true` works in some
+// environments but is unreliable across Linux distros / containers, so we
+// also point at known TTF locations directly. The first matching pair (regular
+// + bold) is used; if none match we fall back to system fonts.
+const FONT_CANDIDATES: Array<{ regular: string; bold: string }> = [
+  {
+    regular: "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    bold: "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+  },
+  {
+    regular: "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+    bold: "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+  },
+  {
+    regular: "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    bold: "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+  },
+  {
+    regular: "/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf",
+    bold: "/usr/share/fonts/liberation-sans/LiberationSans-Bold.ttf",
+  },
+];
+
+const RESOLVED_FONTS: string[] = (() => {
+  for (const { regular, bold } of FONT_CANDIDATES) {
+    if (existsSync(regular)) {
+      const files = [regular];
+      if (existsSync(bold)) files.push(bold);
+      logger.debug(`chart: using font files ${files.join(", ")}`);
+      return files;
+    }
+  }
+  logger.warn(
+    "chart: no bundled font path matched; falling back to system fonts only",
+  );
+  return [];
+})();
 
 export type ChartDirection = "up" | "down" | "flat";
 
@@ -9,18 +49,23 @@ export interface ChartOptions {
   height?: number;
   title?: string;
   direction?: ChartDirection;
+  /** Short label for the timeframe shown in the header pill, e.g. "1W". */
+  timeframe?: string;
 }
 
 const LINE_COLORS: Record<ChartDirection, string> = {
   up: "#00cc66",
   down: "#ff4444",
-  flat: "#888888",
+  flat: "#9aa0a6",
 };
 
-const BG = "#2b2d31";
-const GRID = "#4e5058";
-const TEXT_DIM = "#b5bac1";
+const BG = "#1f2024";
+const PANEL_BORDER = "#3a3c42";
+const GRID = "#3a3c42";
+const AXIS_TEXT = "#9aa0a6";
 const TEXT_TITLE = "#ffffff";
+const TEXT_SUB = "#b5bac1";
+const PILL_BG = "#2b2d31";
 
 export function renderPriceChart(
   points: PricePoint[],
@@ -28,7 +73,18 @@ export function renderPriceChart(
 ): Buffer | null {
   if (points.length < 2) return null;
   const svg = buildChartSvg(points, opts);
-  return Buffer.from(new Resvg(svg).render().asPng());
+  // Resvg ships without fonts by default — text silently disappears unless
+  // we explicitly load system fonts and pick a family the box has.
+  const resvg = new Resvg(svg, {
+    font: {
+      fontFiles: RESOLVED_FONTS,
+      // Keep system fonts on as a backstop in case the explicit paths above
+      // didn't match (e.g. on a distro we haven't enumerated).
+      loadSystemFonts: RESOLVED_FONTS.length === 0,
+      defaultFontFamily: "DejaVu Sans",
+    },
+  });
+  return Buffer.from(resvg.render().asPng());
 }
 
 function buildChartSvg(points: PricePoint[], opts: ChartOptions): string {
@@ -38,14 +94,17 @@ function buildChartSvg(points: PricePoint[], opts: ChartOptions): string {
   // type narrowing, not a runtime branch we expect to take.
   if (!first || !last) return "";
 
-  const width = opts.width ?? 600;
-  const height = opts.height ?? 300;
+  const width = opts.width ?? 700;
+  const height = opts.height ?? 380;
   const direction = opts.direction ?? "flat";
   const lineColor = LINE_COLORS[direction];
+  const timeframe = opts.timeframe ?? "1W";
 
-  const top = opts.title ? 36 : 16;
-  const right = 56;
-  const bottom = 28;
+  // Layout
+  const header = 76;
+  const top = header + 8;
+  const right = 52;
+  const bottom = 36;
   const left = 16;
   const chartW = width - left - right;
   const chartH = height - top - bottom;
@@ -71,42 +130,104 @@ function buildChartSvg(points: PricePoint[], opts: ChartOptions): string {
       .join(" ") +
     ` L ${lastX.toFixed(1)},${baseline.toFixed(1)} Z`;
 
-  const gridLines = [0, 0.25, 0.5, 0.75, 1]
-    .map((p) => {
+  // Y-axis grid: solid faint at 0 and 100, dashed at 25/50/75.
+  const gridLines = [
+    { p: 1, dashed: false },
+    { p: 0.75, dashed: true },
+    { p: 0.5, dashed: true },
+    { p: 0.25, dashed: true },
+    { p: 0, dashed: false },
+  ]
+    .map(({ p, dashed }) => {
       const y = yOf(p).toFixed(1);
       const labelY = (yOf(p) + 4).toFixed(1);
+      const dash = dashed ? ` stroke-dasharray="2,4"` : "";
       return (
-        `<line x1="${left}" y1="${y}" x2="${left + chartW}" y2="${y}" stroke="${GRID}" stroke-width="1" stroke-dasharray="2,3"/>` +
-        `<text x="${left + chartW + 6}" y="${labelY}" fill="${TEXT_DIM}" font-size="10" font-family="sans-serif">${(p * 100).toFixed(0)}%</text>`
+        `<line x1="${left}" y1="${y}" x2="${left + chartW}" y2="${y}" stroke="${GRID}" stroke-width="1"${dash}/>` +
+        `<text x="${left + chartW + 8}" y="${labelY}" fill="${AXIS_TEXT}" font-size="10" font-family="DejaVu Sans">${(p * 100).toFixed(0)}%</text>`
       );
     })
     .join("");
 
-  const timeY = (top + chartH + 16).toFixed(1);
-  const startLabel = formatDate(tMin);
-  const endLabel = formatDate(tMax);
+  // X-axis: 4 evenly spaced date ticks.
+  const tickCount = 4;
+  const timeY = (top + chartH + 18).toFixed(1);
+  const xTicks: string[] = [];
+  for (let i = 0; i < tickCount; i++) {
+    const frac = i / (tickCount - 1);
+    const t = tMin + frac * tSpan;
+    const x = (left + frac * chartW).toFixed(1);
+    const anchor = i === 0 ? "start" : i === tickCount - 1 ? "end" : "middle";
+    xTicks.push(
+      `<text x="${x}" y="${timeY}" fill="${AXIS_TEXT}" font-size="10" font-family="DejaVu Sans" text-anchor="${anchor}">${formatDate(t)}</text>`,
+    );
+  }
 
-  const currentPct = `${(last.p * 100).toFixed(1)}%`;
-  const labelAbove = lastY > top + 14;
-  const currentLabelY = labelAbove
-    ? (lastY - 6).toFixed(1)
-    : (lastY + 14).toFixed(1);
+  // Last-point marker with halo.
+  const marker =
+    `<circle cx="${lastX.toFixed(1)}" cy="${lastY.toFixed(1)}" r="8" fill="${lineColor}" fill-opacity="0.18"/>` +
+    `<circle cx="${lastX.toFixed(1)}" cy="${lastY.toFixed(1)}" r="3.5" fill="${lineColor}" stroke="${BG}" stroke-width="1.5"/>`;
 
-  const titleSvg = opts.title
-    ? `<text x="${(width / 2).toFixed(1)}" y="22" fill="${TEXT_TITLE}" font-size="14" font-weight="600" font-family="sans-serif" text-anchor="middle">${escapeSvg(truncate(opts.title, 70))}</text>`
+  // Header content
+  const currentPct = last.p * 100;
+  const startPct = first.p * 100;
+  const deltaPct = currentPct - startPct;
+  const arrow = deltaPct > 0 ? "▲" : deltaPct < 0 ? "▼" : "•";
+  const deltaSign = deltaPct > 0 ? "+" : "";
+  const deltaStr = `${arrow} ${deltaSign}${deltaPct.toFixed(2)} pts`;
+
+  const titleText = opts.title ? truncate(opts.title, 64) : "";
+  const titleSvg = titleText
+    ? `<text x="${left}" y="28" fill="${TEXT_TITLE}" font-size="14" font-weight="600" font-family="DejaVu Sans">${escapeSvg(titleText)}</text>`
     : "";
+
+  // "YES probability" subtitle (left, below title)
+  const subtitleSvg = `<text x="${left}" y="50" fill="${TEXT_SUB}" font-size="11" font-family="DejaVu Sans">YES probability</text>`;
+
+  // Big current price (left, below subtitle)
+  const bigPriceSvg = `<text x="${left}" y="72" fill="${lineColor}" font-size="22" font-weight="700" font-family="DejaVu Sans">${currentPct.toFixed(1)}%</text>`;
+
+  // Delta (right of big price)
+  const deltaSvg = `<text x="${left + 90}" y="72" fill="${lineColor}" font-size="12" font-weight="600" font-family="DejaVu Sans">${deltaStr}</text>`;
+
+  // Timeframe pill (top-right)
+  const pillW = 36;
+  const pillH = 22;
+  const pillX = width - right - pillW + 16;
+  const pillY = 18;
+  const pillSvg =
+    `<rect x="${pillX}" y="${pillY}" width="${pillW}" height="${pillH}" rx="11" ry="11" fill="${PILL_BG}" stroke="${PANEL_BORDER}" stroke-width="1"/>` +
+    `<text x="${pillX + pillW / 2}" y="${pillY + 15}" fill="${TEXT_SUB}" font-size="11" font-weight="600" font-family="DejaVu Sans" text-anchor="middle">${escapeSvg(timeframe)}</text>`;
+
+  // Header divider
+  const dividerY = header;
+  const dividerSvg = `<line x1="${left}" y1="${dividerY}" x2="${width - right + 32}" y2="${dividerY}" stroke="${PANEL_BORDER}" stroke-width="1"/>`;
+
+  // Gradient definitions
+  const gradId = "areaGrad";
+  const defs =
+    `<defs>` +
+    `<linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">` +
+    `<stop offset="0%" stop-color="${lineColor}" stop-opacity="0.35"/>` +
+    `<stop offset="100%" stop-color="${lineColor}" stop-opacity="0.02"/>` +
+    `</linearGradient>` +
+    `</defs>`;
 
   return [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
+    defs,
     `<rect width="${width}" height="${height}" fill="${BG}"/>`,
     titleSvg,
+    subtitleSvg,
+    bigPriceSvg,
+    deltaSvg,
+    pillSvg,
+    dividerSvg,
     gridLines,
-    `<path d="${areaPath}" fill="${lineColor}" fill-opacity="0.18"/>`,
+    `<path d="${areaPath}" fill="url(#${gradId})"/>`,
     `<polyline points="${linePoints}" fill="none" stroke="${lineColor}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`,
-    `<circle cx="${lastX.toFixed(1)}" cy="${lastY.toFixed(1)}" r="3" fill="${lineColor}"/>`,
-    `<text x="${(left + chartW + 6).toFixed(1)}" y="${currentLabelY}" fill="${lineColor}" font-size="11" font-weight="600" font-family="sans-serif">${currentPct}</text>`,
-    `<text x="${left}" y="${timeY}" fill="${TEXT_DIM}" font-size="10" font-family="sans-serif">${startLabel}</text>`,
-    `<text x="${(left + chartW).toFixed(1)}" y="${timeY}" fill="${TEXT_DIM}" font-size="10" font-family="sans-serif" text-anchor="end">${endLabel}</text>`,
+    marker,
+    xTicks.join(""),
     `</svg>`,
   ].join("");
 }

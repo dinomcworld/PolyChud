@@ -1,7 +1,9 @@
 import {
   ActionRowBuilder,
   AttachmentBuilder,
+  ButtonBuilder,
   type ButtonInteraction,
+  ButtonStyle,
   EmbedBuilder,
   MessageFlags,
   ModalBuilder,
@@ -97,6 +99,7 @@ const PREFIX_ROUTES: Array<[string, ButtonHandler]> = [
   ["bet_no_", handleBetButton],
   ["refresh_event_", handleRefreshEvent],
   ["refresh_", handleRefresh],
+  ["chart_back_", handleChartBack],
   ["chart_", handleChart],
   [confirmClose.prefix, handleConfirmClose],
   [confirmBet.prefix, handleConfirm],
@@ -292,33 +295,130 @@ async function handleRefreshEvent(interaction: ButtonInteraction) {
   }
 }
 
+type ChartInterval = "6h" | "1d" | "1w" | "1m" | "max";
+
+const CHART_TIMEFRAMES: Array<{
+  interval: ChartInterval;
+  label: string;
+  pillLabel: string;
+  fidelity: number;
+  footer: string;
+}> = [
+  {
+    interval: "6h",
+    label: "6H",
+    pillLabel: "6H",
+    fidelity: 5,
+    footer: "6-hour price history",
+  },
+  {
+    interval: "1d",
+    label: "1D",
+    pillLabel: "1D",
+    fidelity: 30,
+    footer: "24-hour price history",
+  },
+  {
+    interval: "1w",
+    label: "1W",
+    pillLabel: "1W",
+    fidelity: 60,
+    footer: "1-week price history",
+  },
+  {
+    interval: "1m",
+    label: "1M",
+    pillLabel: "1M",
+    fidelity: 240,
+    footer: "1-month price history",
+  },
+  {
+    interval: "max",
+    label: "ALL",
+    pillLabel: "ALL",
+    fidelity: 1440,
+    footer: "Full price history",
+  },
+];
+
+const DEFAULT_CHART_INTERVAL: ChartInterval = "1w";
+
+function parseChartCustomId(raw: string): {
+  conditionId: string;
+  polyEventId: string | null;
+  interval: ChartInterval;
+} {
+  // Format: {conditionId}[_evt{polyEventId}][_tf{interval}]
+  let rest = raw;
+  let interval: ChartInterval = DEFAULT_CHART_INTERVAL;
+  const tfIdx = rest.lastIndexOf("_tf");
+  if (tfIdx >= 0) {
+    const candidate = rest.slice(tfIdx + 3) as ChartInterval;
+    if (CHART_TIMEFRAMES.some((t) => t.interval === candidate)) {
+      interval = candidate;
+      rest = rest.slice(0, tfIdx);
+    }
+  }
+  const evtIdx = rest.indexOf("_evt");
+  const conditionId = evtIdx >= 0 ? rest.slice(0, evtIdx) : rest;
+  const polyEventId = evtIdx >= 0 ? rest.slice(evtIdx + 4) : null;
+  return { conditionId, polyEventId, interval };
+}
+
+function chartCustomId(
+  conditionId: string,
+  polyEventId: string | null,
+  interval: ChartInterval,
+): string {
+  const evt = polyEventId ? `_evt${polyEventId}` : "";
+  // Default interval is omitted so the existing "Chart" button on the market
+  // card (`chart_{conditionId}[_evt...]`) keeps working unchanged.
+  const tf = interval === DEFAULT_CHART_INTERVAL ? "" : `_tf${interval}`;
+  return `chart_${conditionId}${evt}${tf}`;
+}
+
 async function handleChart(interaction: ButtonInteraction) {
-  // Ephemeral so the public market card stays clean — only the clicker sees the chart.
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  const conditionId = interaction.customId.slice("chart_".length);
+  // Edit the market card in place — Back to Market reverses it. Cleaner than
+  // an ephemeral follow-up, which leaves duplicate chat behind on Back.
+  await interaction.deferUpdate();
+  const { conditionId, polyEventId, interval } = parseChartCustomId(
+    interaction.customId.slice("chart_".length),
+  );
+  const tf =
+    CHART_TIMEFRAMES.find((t) => t.interval === interval) ??
+    CHART_TIMEFRAMES[2]; // 1w fallback
+  if (!tf) return;
+
+  // We deferred via deferUpdate, so the original market card is untouched
+  // until we editReply. Errors should leave the card intact and surface as
+  // an ephemeral follow-up.
+  const ephemeralError = (content: string) =>
+    interaction.followUp({ content, flags: MessageFlags.Ephemeral });
 
   try {
     const gamma =
       getCachedMarket(conditionId) ??
       (await getMarketByConditionId(conditionId));
     if (!gamma) {
-      await interaction.editReply({ content: "Market not found." });
+      await ephemeralError("Market not found.");
       return;
     }
 
     const yesTokenId = gamma.clobTokenIds[0];
     if (!yesTokenId) {
-      await interaction.editReply({
-        content: "Price history unavailable for this market.",
-      });
+      await ephemeralError("Price history unavailable for this market.");
       return;
     }
 
-    const points = await fetchPriceHistory(yesTokenId, "1w", 60);
+    const points = await fetchPriceHistory(
+      yesTokenId,
+      tf.interval,
+      tf.fidelity,
+    );
     if (points.length < 2) {
-      await interaction.editReply({
-        content: "Not enough price history yet for this market.",
-      });
+      await ephemeralError(
+        `Not enough ${tf.label} price history yet for this market.`,
+      );
       return;
     }
 
@@ -329,9 +429,13 @@ async function handleChart(interaction: ButtonInteraction) {
     const rawTitle = gamma.groupItemTitle
       ? `${gamma.groupItemTitle} — ${gamma.question}`
       : gamma.question;
-    const png = renderPriceChart(points, { title: rawTitle, direction });
+    const png = renderPriceChart(points, {
+      title: rawTitle,
+      direction,
+      timeframe: tf.pillLabel,
+    });
     if (!png) {
-      await interaction.editReply({ content: "Couldn't render chart." });
+      await ephemeralError("Couldn't render chart.");
       return;
     }
 
@@ -351,13 +455,114 @@ async function handleChart(interaction: ButtonInteraction) {
             : COLORS.GRAY,
       )
       .setImage("attachment://chart.png")
-      .setFooter({ text: "1-week price history • Polymarket" });
+      .setFooter({ text: `${tf.footer} • Polymarket` });
 
-    await interaction.editReply({ embeds: [embed], files: [file] });
+    const evtSuffix = polyEventId ? `_evt${polyEventId}` : "";
+    const navRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`chart_back_${conditionId}${evtSuffix}`)
+        .setLabel("◀ Back to Market")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setLabel("Polymarket")
+        .setStyle(ButtonStyle.Link)
+        .setURL(marketUrl),
+    );
+    const tfRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      ...CHART_TIMEFRAMES.map((t) =>
+        new ButtonBuilder()
+          .setCustomId(chartCustomId(conditionId, polyEventId, t.interval))
+          .setLabel(t.label)
+          .setStyle(
+            t.interval === interval
+              ? ButtonStyle.Primary
+              : ButtonStyle.Secondary,
+          )
+          // Disable the active timeframe — clicking it would be a no-op edit
+          // and the disabled state doubles as a visual selection indicator.
+          .setDisabled(t.interval === interval),
+      ),
+    );
+
+    await interaction.editReply({
+      embeds: [embed],
+      files: [file],
+      components: [tfRow, navRow],
+    });
   } catch (err) {
     logger.error("Chart render failed:", err);
+    await ephemeralError("Couldn't load chart. Try again.");
+  }
+}
+
+async function handleChartBack(interaction: ButtonInteraction) {
+  await interaction.deferUpdate();
+  // chart_back_{conditionId} or chart_back_{conditionId}_evt{polyEventId}
+  const raw = interaction.customId.slice("chart_back_".length);
+  const evtIdx = raw.indexOf("_evt");
+  const conditionId = evtIdx >= 0 ? raw.slice(0, evtIdx) : raw;
+  const polyEventId = evtIdx >= 0 ? raw.slice(evtIdx + 4) : null;
+
+  try {
+    if (polyEventId) {
+      const gammaEvent = await getEventById(polyEventId);
+      const gamma = gammaEvent?.markets.find(
+        (m) => m.conditionId === conditionId,
+      );
+      if (gammaEvent && gamma) {
+        const cardData = gammaMarketToCardData(gamma, gammaEvent.slug);
+        const embed = buildMarketEmbed(cardData);
+        const buttons = buildMarketButtons(
+          gamma.conditionId,
+          gamma.slug,
+          gamma.active && !gamma.closed,
+          gammaEvent.slug,
+          gammaEvent.id,
+        );
+        // Restore Back to Event so the user keeps the same affordances they
+        // had before clicking Chart.
+        buttons.addComponents(buildBackToEventButton(gammaEvent.id));
+        await interaction.editReply({
+          embeds: [embed],
+          files: [],
+          components: [buttons],
+        });
+        return;
+      }
+    }
+
+    const gamma =
+      getCachedMarket(conditionId) ??
+      (await getMarketByConditionId(conditionId));
+    if (!gamma) {
+      await interaction.followUp({
+        content: "Market not found.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const eventSlug = gamma.events?.[0]?.slug ?? null;
+    const eventId = gamma.events?.[0]?.id ?? null;
+    const cardData = gammaMarketToCardData(gamma, eventSlug);
+    const embed = buildMarketEmbed(cardData);
+    const buttons = buildMarketButtons(
+      gamma.conditionId,
+      gamma.slug,
+      gamma.active && !gamma.closed,
+      eventSlug,
+      eventId,
+    );
     await interaction.editReply({
-      content: "Couldn't load chart. Try again.",
+      embeds: [embed],
+      files: [],
+      components: [buttons],
+    });
+  } catch (err) {
+    logger.error("Chart back failed:", err);
+    await interaction.followUp({
+      content: "Couldn't load market. Try again.",
+      flags: MessageFlags.Ephemeral,
     });
   }
 }
