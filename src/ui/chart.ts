@@ -113,7 +113,23 @@ function buildChartSvg(points: PricePoint[], opts: ChartOptions): string {
   const tMax = last.t;
   const tSpan = Math.max(tMax - tMin, 1);
   const xOf = (t: number) => left + ((t - tMin) / tSpan) * chartW;
-  const yOf = (p: number) => top + (1 - clamp01(p)) * chartH;
+
+  // Auto-scale Y to the data's actual range (with padding) instead of always
+  // 0–100%. For narrow markets this makes movement visible; Polymarket does
+  // the same. Pad by 15% of range, with a 1pp floor for near-flat lines.
+  let pMin = Infinity;
+  let pMax = -Infinity;
+  for (const pt of points) {
+    if (pt.p < pMin) pMin = pt.p;
+    if (pt.p > pMax) pMax = pt.p;
+  }
+  const dataSpan = pMax - pMin;
+  const pad = Math.max(dataSpan * 0.15, 0.01);
+  const yMin = Math.max(0, pMin - pad);
+  const yMax = Math.min(1, pMax + pad);
+  const ySpan = Math.max(yMax - yMin, 0.0001);
+  const yOf = (p: number) => top + (1 - (clamp01(p) - yMin) / ySpan) * chartH;
+  const yTicks = niceTicks(yMin, yMax, 5);
 
   const lastX = xOf(last.t);
   const lastY = yOf(last.p);
@@ -130,21 +146,18 @@ function buildChartSvg(points: PricePoint[], opts: ChartOptions): string {
       .join(" ") +
     ` L ${lastX.toFixed(1)},${baseline.toFixed(1)} Z`;
 
-  // Y-axis grid: solid faint at 0 and 100, dashed at 25/50/75.
-  const gridLines = [
-    { p: 1, dashed: false },
-    { p: 0.75, dashed: true },
-    { p: 0.5, dashed: true },
-    { p: 0.25, dashed: true },
-    { p: 0, dashed: false },
-  ]
-    .map(({ p, dashed }) => {
+  // Y-axis grid uses the computed nice ticks for the visible range. End ticks
+  // (top/bottom of the visible band) are solid; interior ticks are dashed.
+  const tickLabel = formatPctTick(yTicks);
+  const gridLines = yTicks
+    .map((p, i) => {
+      const dashed = i !== 0 && i !== yTicks.length - 1;
       const y = yOf(p).toFixed(1);
       const labelY = (yOf(p) + 4).toFixed(1);
       const dash = dashed ? ` stroke-dasharray="2,4"` : "";
       return (
         `<line x1="${left}" y1="${y}" x2="${left + chartW}" y2="${y}" stroke="${GRID}" stroke-width="1"${dash}/>` +
-        `<text x="${left + chartW + 8}" y="${labelY}" fill="${AXIS_TEXT}" font-size="10" font-family="DejaVu Sans">${(p * 100).toFixed(0)}%</text>`
+        `<text x="${left + chartW + 8}" y="${labelY}" fill="${AXIS_TEXT}" font-size="10" font-family="DejaVu Sans">${tickLabel(p)}</text>`
       );
     })
     .join("");
@@ -255,6 +268,58 @@ function clamp01(n: number): number {
   if (n < 0) return 0;
   if (n > 1) return 1;
   return n;
+}
+
+/** Pick "nice" round tick values across [min, max] aiming for ~`target`
+ * ticks. Operates on percentage points (0–100) internally so we can land on
+ * round 1/2/5/10 boundaries that look right next to a "%" label. */
+function niceTicks(min: number, max: number, target: number): number[] {
+  const lo = min * 100;
+  const hi = max * 100;
+  const span = Math.max(hi - lo, 0.01);
+  const rough = span / Math.max(target - 1, 1);
+  // Snap step to a 1/2/5 × 10^n boundary.
+  const pow = 10 ** Math.floor(Math.log10(rough));
+  const norm = rough / pow;
+  let step: number;
+  if (norm < 1.5) step = 1 * pow;
+  else if (norm < 3) step = 2 * pow;
+  else if (norm < 7) step = 5 * pow;
+  else step = 10 * pow;
+  const start = Math.ceil(lo / step) * step;
+  const ticks: number[] = [];
+  for (let v = start; v <= hi + 1e-9; v += step) {
+    ticks.push(v / 100);
+  }
+  // If the band edge is meaningfully outside the nearest snapped tick, pin it
+  // so the grid spans the full chart. The threshold is ~25% of one step;
+  // closer than that, the duplicate label would just visually crowd the edge.
+  const stepFrac = step / 100;
+  if (ticks.length === 0 || ticks[0]! - min > stepFrac * 0.25) {
+    ticks.unshift(min);
+  }
+  if (ticks.length === 0 || max - ticks[ticks.length - 1]! > stepFrac * 0.25) {
+    ticks.push(max);
+  }
+  return ticks;
+}
+
+/** Decide decimal places for tick labels based on the visible step size, then
+ * return a formatter. Sub-percent steps need decimals so labels don't repeat. */
+function formatPctTick(ticks: number[]): (p: number) => string {
+  let minStep = Infinity;
+  for (let i = 1; i < ticks.length; i++) {
+    const a = ticks[i];
+    const b = ticks[i - 1];
+    if (a === undefined || b === undefined) continue;
+    const d = Math.abs(a - b);
+    if (d > 0 && d < minStep) minStep = d;
+  }
+  const stepPct = minStep * 100;
+  let decimals = 0;
+  if (stepPct < 0.1) decimals = 2;
+  else if (stepPct < 1) decimals = 1;
+  return (p: number) => `${(p * 100).toFixed(decimals)}%`;
 }
 
 function escapeSvg(s: string): string {
